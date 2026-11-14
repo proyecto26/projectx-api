@@ -1,0 +1,24 @@
+FROM node:24
+
+# Install bash and other dependencies
+RUN apt-get update && apt-get install -y bash libc6 && rm -rf /var/lib/apt/lists/*
+
+# Set the working directory inside the container
+WORKDIR /app
+
+# Copy package.json and pnpm-lock.yaml
+COPY package.json .
+COPY pnpm-lock.yaml .
+COPY pnpm-workspace.yaml .
+
+# Install pnpm globally
+RUN npm install -g pnpm@12.16.1
+
+# Copy the application files
+COPY . .
+
+# Install dependencies
+RUN pnpm install --frozen-lockfile
+
+# Install Turborepo globally
+RUN npm install -g turbo@latest
