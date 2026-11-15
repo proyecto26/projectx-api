@@ -22,11 +22,12 @@
     "build": "tsup",
     "dev": "tsc -w -p tsconfig.json",
     "lint": "biome check .",
-    "test": "echo 'no tests'",
+    "test": "vitest run",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate deploy",
     "prisma:migrate:dev": "prisma migrate dev",
-    "prisma:seed": "prisma db seed"
+    "prisma:seed": "prisma db seed",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.10.1",
@@ -44,7 +45,8 @@
     "dotenv-mono": "^1.5.1",
     "tsup": "^8.5.1",
     "tsx": "^4.23.15",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "4.1.11"
   },
   "peerDependencies": {
     "@nestjs/common": "12.3.3"

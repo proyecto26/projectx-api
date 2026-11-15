@@ -49,12 +49,8 @@ vitest.config.*.timestamp*
 
 test-output
 
-
-storybook-static
-
 # env files
 .env
-storybook-static
 
 # TypeScript build cache
 *.tsbuildinfo

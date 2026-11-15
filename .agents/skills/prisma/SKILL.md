@@ -10,6 +10,8 @@ allowed-tools: Read, Grep, Glob, Edit, Write, Bash(pnpm:*), Bash(npx prisma:*)
 
 The Prisma schema and client are in `packages/db/`.
 
+The template ships the auth/RBAC models only: `User`, `Role`, `UserRole`, `Permission`, `RolePermission` (permissions are schema for future fine-grained checks). The examples below use an illustrative `Project`/`Task` domain you would add yourself.
+
 ## Schema Location
 
 ```
@@ -49,21 +51,20 @@ pnpm --filter @projectx/db exec prisma studio
 ### Basic Model
 
 ```prisma
-model Product {
+model Project {
   id          String   @id @default(cuid())
   name        String
   description String?
-  price       Decimal  @db.Decimal(10, 2)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   // Relations
-  categoryId  String
-  category    Category @relation(fields: [categoryId], references: [id])
-  orderItems  OrderItem[]
+  ownerId     Int
+  owner       User     @relation(fields: [ownerId], references: [id])
+  tasks       Task[]
 
-  @@index([categoryId])
-  @@map("products")
+  @@index([ownerId])
+  @@map("projects")
 }
 ```
 
@@ -83,11 +84,10 @@ model Location {
 ### Enums
 
 ```prisma
-enum OrderStatus {
-  PENDING
-  PROCESSING
-  SHIPPED
-  DELIVERED
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  DONE
   CANCELLED
 }
 ```
@@ -97,45 +97,45 @@ enum OrderStatus {
 ### Creating a Repository Service
 
 ```typescript
-// packages/db/src/lib/product/product-repository.service.ts
+// packages/db/src/lib/project/project-repository.service.ts
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
-import { Prisma, Product } from '@prisma/client';
+import type { Prisma, Project } from '../../../generated/prisma/client';
 
 @Injectable()
-export class ProductRepositoryService {
+export class ProjectRepositoryService {
   constructor(private readonly prisma: PrismaService) {}
 
   async findAll(params?: {
     skip?: number;
     take?: number;
-    cursor?: Prisma.ProductWhereUniqueInput;
-    where?: Prisma.ProductWhereInput;
-    orderBy?: Prisma.ProductOrderByWithRelationInput;
-  }): Promise<Product[]> {
-    return this.prisma.product.findMany(params);
+    cursor?: Prisma.ProjectWhereUniqueInput;
+    where?: Prisma.ProjectWhereInput;
+    orderBy?: Prisma.ProjectOrderByWithRelationInput;
+  }): Promise<Project[]> {
+    return this.prisma.project.findMany(params);
   }
 
-  async findById(id: string): Promise<Product | null> {
-    return this.prisma.product.findUnique({
+  async findById(id: string): Promise<Project | null> {
+    return this.prisma.project.findUnique({
       where: { id },
-      include: { category: true },
+      include: { tasks: true },
     });
   }
 
-  async create(data: Prisma.ProductCreateInput): Promise<Product> {
-    return this.prisma.product.create({ data });
+  async create(data: Prisma.ProjectCreateInput): Promise<Project> {
+    return this.prisma.project.create({ data });
   }
 
-  async update(id: string, data: Prisma.ProductUpdateInput): Promise<Product> {
-    return this.prisma.product.update({
+  async update(id: string, data: Prisma.ProjectUpdateInput): Promise<Project> {
+    return this.prisma.project.update({
       where: { id },
       data,
     });
   }
 
-  async delete(id: string): Promise<Product> {
-    return this.prisma.product.delete({ where: { id } });
+  async delete(id: string): Promise<Project> {
+    return this.prisma.project.delete({ where: { id } });
   }
 }
 ```
@@ -145,28 +145,24 @@ export class ProductRepositoryService {
 ### Filtering and Pagination
 
 ```typescript
-const products = await prisma.product.findMany({
+const projects = await prisma.project.findMany({
   where: {
-    name: { contains: 'shirt', mode: 'insensitive' },
-    price: { gte: 10, lte: 100 },
-    category: { name: 'Clothing' },
+    name: { contains: 'api', mode: 'insensitive' },
+    tasks: { some: { status: 'IN_PROGRESS' } },
   },
   skip: 0,
   take: 20,
   orderBy: { createdAt: 'desc' },
-  include: { category: true },
+  include: { owner: true },
 });
 ```
 
 ### Transactions
 
 ```typescript
-const [order, inventory] = await prisma.$transaction([
-  prisma.order.create({ data: orderData }),
-  prisma.inventory.update({
-    where: { productId },
-    data: { quantity: { decrement: quantity } },
-  }),
+const [project, task] = await prisma.$transaction([
+  prisma.project.create({ data: projectData }),
+  prisma.task.create({ data: { ...taskData, projectId } }),
 ]);
 ```
 
@@ -195,21 +191,17 @@ const nearbyLocations = await prisma.$queryRaw`
 ## Seeding
 
 ```typescript
-// packages/db/prisma/seed.ts
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
-
+// packages/db/prisma/seed.ts (simplified)
 async function main() {
-  // Upsert to avoid duplicates
-  await prisma.category.upsert({
-    where: { slug: 'electronics' },
-    update: {},
-    create: {
-      name: 'Electronics',
-      slug: 'electronics',
-    },
-  });
+  // Upsert to avoid duplicates: the seed must be safe to run repeatedly
+  for (const name of ['admin', 'user']) {
+    await prisma.role.upsert({
+      where: { name },
+      update: {},
+      create: { name },
+    });
+  }
+  // Emails listed in ADMIN_EMAILS are promoted to the admin role
 }
 
 main()
@@ -223,5 +215,5 @@ main()
 2. **Always include `@@map`** for explicit table names
 3. **Add indexes** for frequently queried fields
 4. **Use transactions** for related operations
-5. **Name migrations descriptively** (e.g., `add_product_inventory`)
+5. **Name migrations descriptively** (e.g., `add_project_tasks`)
 6. **Validate data** at the application layer before database operations

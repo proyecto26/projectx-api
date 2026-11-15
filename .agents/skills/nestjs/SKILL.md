@@ -1,21 +1,31 @@
 ---
 name: nestjs
-description: NestJS microservices development. Use when creating controllers, services, modules, guards, interceptors, or working with NestJS patterns in auth, order, or product services.
+description: NestJS API development. Use when creating controllers, services, modules, guards (JWT, roles), interceptors, or working with NestJS patterns in the apps/api application or the shared packages/core module.
 allowed-tools: Read, Grep, Glob, Edit, Write
 ---
 
-# NestJS Microservices Development
+# NestJS API Development
 
 ## Project Structure
 
-This project uses NestJS for three microservices:
-- `apps/auth` - Authentication (JWT, Passport)
-- `apps/order` - Order management (integrates with Temporal)
-- `apps/product` - Product catalog
+This template has one NestJS app, `apps/api` (package `@projectx/api`):
+- Auth: email OTP login through a Temporal workflow, JWT issued on verify
+- Users: profile endpoints, admin-only user listing
+- RBAC: `@Roles(...)` + `RolesGuard` from `@projectx/core` (roles loaded from the database per request)
+- Health (`/health`) and Swagger docs
+- Temporal worker + client running in-process (`@proyecto26/temporal-workflows` from npm)
 
-Shared modules are in `packages/core`.
+Shared code lives in `packages/core` (guards, strategies, config validation, logger, health, swagger, workflow utils), `packages/db` (Prisma), `packages/models` (DTOs) and `packages/email` (SendGrid + MJML).
 
 ## Creating a New Module
+
+Prefer the generator, which creates the module in `apps/api` and registers it in `AppModule`:
+
+```bash
+pnpm gen:module        # or: pnpm cli generate module
+```
+
+The manual steps it performs:
 
 ### 1. Create Module File
 
@@ -112,18 +122,22 @@ export class CreateFeatureDto {
 }
 ```
 
-## Authentication Guards
+## Authentication and Roles
 
-Use guards from `@projectx/core`:
+Use guards from `@projectx/core`. `JwtAuthGuard` authenticates; `RolesGuard` loads the user's roles from the database on each request (roles are not in the JWT, so revoking a role is immediate):
 
 ```typescript
-import { UseGuards } from '@nestjs/common';
-import { JwtAuthGuard } from '@projectx/core';
+import { Controller, Get, UseGuards } from '@nestjs/common';
+import { AuthenticatedUser, type AuthUser, JwtAuthGuard, Roles, RolesGuard } from '@projectx/core';
 
-@Controller('protected')
-@UseGuards(JwtAuthGuard)
-export class ProtectedController {
-  // All routes require authentication
+@Controller('reports')
+@UseGuards(JwtAuthGuard, RolesGuard)
+export class ReportController {
+  @Get()
+  @Roles('admin')
+  findAll(@AuthenticatedUser() user: AuthUser) {
+    // 401 without a token, 403 without the admin role
+  }
 }
 ```
 
@@ -180,16 +194,13 @@ describe('FeatureService', () => {
 });
 ```
 
-## Running Services
+## Running the API
 
 ```bash
-# Run specific service
-pnpm dev:auth
-pnpm dev:order
-pnpm dev:product
-
-# Run all services
-pnpm dev
+pnpm dev:api        # watch mode
+pnpm build:api      # build @projectx/api and its dependencies
+pnpm --filter @projectx/api test
+pnpm test:e2e       # e2e tests (needs the database)
 ```
 
 ## Best Practices
@@ -199,4 +210,4 @@ pnpm dev
 3. **Use repository pattern** via Prisma services from `@projectx/db`
 4. **Handle errors** with NestJS built-in exceptions
 5. **Write tests** for services and controllers
-6. **Use guards** from `@projectx/core` for authentication
+6. **Use guards** from `@projectx/core` for authentication (`JwtAuthGuard`) and authorization (`RolesGuard` + `@Roles`)

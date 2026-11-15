@@ -1,0 +1,12 @@
+import { Injectable, Logger } from "@nestjs/common";
+
+@Injectable()
+export class {{pascalCase name}}Service {
+  private readonly logger = new Logger({{pascalCase name}}Service.name);
+
+  // TODO: inject a repository from @projectx/db and replace this placeholder
+  async findAll(): Promise<unknown[]> {
+    this.logger.debug("findAll()");
+    return [];
+  }
+}

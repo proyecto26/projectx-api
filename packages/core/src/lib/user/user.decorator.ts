@@ -7,9 +7,9 @@ import {
 import type { AuthUser } from "./user.interface";
 
 export const AuthenticatedUser = createParamDecorator(
-  (data: keyof AuthUser, ctx: ExecutionContext) => {
-    const request = ctx.switchToHttp().getRequest();
-    const user = request.user as AuthUser;
+  (data: keyof AuthUser | undefined, ctx: ExecutionContext) => {
+    const request = ctx.switchToHttp().getRequest<{ user?: AuthUser }>();
+    const user = request.user;
     if (!user) {
       throw new UnauthorizedException();
     }

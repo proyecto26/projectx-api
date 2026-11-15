@@ -2,325 +2,184 @@ import * as prompts from "@clack/prompts";
 import chalk from "chalk";
 import { execa } from "execa";
 import ora from "ora";
-import { kebabCase } from "../utils/case.js";
+import { kebabCase, pascalCase } from "../utils/case.js";
 import {
+  API_APP_DIR,
+  type ApiLayout,
   findProjectRoot,
-  getNextAvailablePort,
-  getTemporalServices,
-  serviceExists,
+  getActivityNames,
+  getApiLayout,
+  getModules,
+  getWorkflows,
 } from "../utils/paths.js";
 
-interface GenerateOptions {
+export interface GenerateOptions {
   name?: string;
-  port?: string;
-  withEmail?: boolean;
-  withPayment?: boolean;
-  service?: string;
+  feature?: string;
+  activity?: string;
+  description?: string;
+  yes?: boolean;
+}
+
+const KEBAB = /^[a-z][a-z0-9-]*$/;
+const CAMEL = /^[a-z][a-zA-Z0-9]*$/;
+
+function cancelled(): never {
+  console.log(chalk.yellow("\nOperation cancelled."));
+  process.exit(0);
+}
+
+function requireApi(): { projectRoot: string; layout: ApiLayout } {
+  const projectRoot = findProjectRoot();
+  if (!projectRoot) {
+    console.error(
+      chalk.red(
+        "\nError: could not find the project root (turbo.json + package.json with workspaces).",
+      ),
+    );
+    process.exit(1);
+  }
+  const layout = getApiLayout(projectRoot);
+  if (!layout) {
+    console.error(
+      chalk.red(
+        `\nError: ${API_APP_DIR} has no activities/activities.service.ts, so the generators can't wire it.`,
+      ),
+    );
+    process.exit(1);
+  }
+  return { projectRoot, layout };
+}
+
+/** Use the flag value, the default with --yes, or prompt. */
+async function ask(
+  value: string | undefined,
+  options: Parameters<typeof prompts.text>[0],
+  yes = false,
+): Promise<string> {
+  if (!value && yes && options.defaultValue) return options.defaultValue;
+  if (value) {
+    const error = options.validate?.(value);
+    if (error) {
+      console.error(chalk.red(`\n${error}`));
+      process.exit(1);
+    }
+    return value;
+  }
+  const answer = await prompts.text(options);
+  if (prompts.isCancel(answer)) cancelled();
+  return answer || options.defaultValue || "";
+}
+
+async function runTurboGen(
+  projectRoot: string,
+  generator: string,
+  args: string[],
+): Promise<void> {
+  // Arguments map to the generator prompts in order (turbo gen --args)
+  await execa("pnpm", ["exec", "turbo", "gen", generator, "--args", ...args], {
+    cwd: projectRoot,
+    stdio: "pipe",
+  });
 }
 
 export async function generateCommand(
   inputType?: string,
   options: GenerateOptions = {},
 ): Promise<void> {
-  const projectRoot = findProjectRoot();
+  const { projectRoot, layout } = requireApi();
 
-  if (!projectRoot) {
-    console.error(
-      chalk.red(
-        "\nError: Could not find ProjectX root directory. Make sure you're inside a ProjectX project.",
-      ),
-    );
-    process.exit(1);
-  }
-
-  // If type not provided, ask for it
   let generatorType = inputType;
   if (!generatorType) {
-    const selectedType = await prompts.select({
+    const selected = await prompts.select({
       message: "What would you like to generate?",
       options: [
         {
-          value: "service",
-          label: "Basic NestJS service",
-          hint: "Without Temporal workflows",
-        },
-        {
-          value: "temporal-service",
-          label: "Temporal-enabled service",
-          hint: "With workflows and activities",
+          value: "module",
+          label: "Module",
+          hint: `NestJS feature module in ${API_APP_DIR}`,
         },
         {
           value: "workflow",
           label: "Workflow",
-          hint: "Add to existing service",
+          hint: "Temporal workflow + activity + test",
         },
       ],
     });
-
-    if (prompts.isCancel(selectedType)) {
-      console.log(chalk.yellow("\nOperation cancelled."));
-      process.exit(0);
-    }
-
-    generatorType = selectedType;
+    if (prompts.isCancel(selected)) cancelled();
+    generatorType = selected;
   }
 
   switch (generatorType) {
-    case "service":
-      await generateService(projectRoot, options, false);
-      break;
-    case "temporal-service":
-      await generateService(projectRoot, options, true);
+    case "module":
+      await generateModule(projectRoot, layout, options);
       break;
     case "workflow":
-      await generateWorkflow(projectRoot, options);
+      await generateWorkflow(projectRoot, layout, options);
       break;
     default:
       console.error(chalk.red(`\nUnknown generator type: ${generatorType}`));
-      console.log(
-        chalk.gray("Available types: service, temporal-service, workflow"),
-      );
+      console.log(chalk.gray("Available types: module, workflow"));
       process.exit(1);
   }
 }
 
-async function generateService(
+async function confirmOrExit(options: GenerateOptions): Promise<void> {
+  if (options.yes) return;
+  const confirm = await prompts.confirm({ message: "Generate?" });
+  if (prompts.isCancel(confirm) || !confirm) cancelled();
+}
+
+async function generateModule(
   projectRoot: string,
+  layout: ApiLayout,
   options: GenerateOptions,
-  withTemporal: boolean,
 ): Promise<void> {
-  console.log(
-    chalk.cyan(
-      `\n${withTemporal ? "🔄" : "🏗️"} Creating ${withTemporal ? "Temporal-enabled" : "basic"} NestJS service...\n`,
-    ),
+  console.log(chalk.cyan(`\n🧱 New NestJS module in ${API_APP_DIR}\n`));
+  const existing = getModules(layout);
+
+  const name = kebabCase(
+    await ask(options.name, {
+      message: "Module name (kebab-case, e.g. projects):",
+      placeholder: "projects",
+      validate: (value) => {
+        if (!value || !KEBAB.test(value)) {
+          return "Use lowercase letters, numbers and hyphens, starting with a letter";
+        }
+        if (existing.includes(value)) return `Module "${value}" already exists`;
+        return undefined;
+      },
+    }),
+  );
+  const defaultDescription = `${pascalCase(name)} endpoints`;
+  const description = await ask(
+    options.description,
+    {
+      message: "Short description (Swagger):",
+      placeholder: defaultDescription,
+      defaultValue: defaultDescription,
+    },
+    options.yes,
   );
 
-  // Get service name
-  let serviceName = options.name;
-  if (!serviceName) {
-    const nameInput = await prompts.text({
-      message: "Service name (lowercase, e.g., inventory):",
-      placeholder: "my-service",
-      validate: (value) => {
-        if (!value || value.trim() === "") return "Service name is required";
-        if (!/^[a-z][a-z0-9-]*$/.test(value)) {
-          return "Must be lowercase, start with a letter, contain only letters, numbers, and hyphens";
-        }
-        if (serviceExists(projectRoot, value)) {
-          return `Service "${value}" already exists`;
-        }
-        return undefined;
-      },
-    });
+  console.log(chalk.cyan("\n📋 Summary:\n"));
+  console.log(`  Module:     ${chalk.green(`${pascalCase(name)}Module`)}`);
+  console.log(`  Route:      ${chalk.green(`/${name}`)} (JWT protected)`);
+  console.log(`  Registered: ${chalk.green("AppModule imports")}`);
+  await confirmOrExit(options);
 
-    if (prompts.isCancel(nameInput)) {
-      console.log(chalk.yellow("\nOperation cancelled."));
-      process.exit(0);
-    }
-
-    serviceName = kebabCase(nameInput);
-  }
-
-  // Get port
-  let port = options.port;
-  if (!port) {
-    const suggestedPort = getNextAvailablePort(projectRoot);
-    const portInput = await prompts.text({
-      message: "Port number:",
-      placeholder: suggestedPort.toString(),
-      defaultValue: suggestedPort.toString(),
-      validate: (value) => {
-        const p = Number.parseInt(value, 10);
-        if (Number.isNaN(p) || p < 1 || p > 65535) {
-          return "Port must be a valid number between 1 and 65535";
-        }
-        return undefined;
-      },
-    });
-
-    if (prompts.isCancel(portInput)) {
-      console.log(chalk.yellow("\nOperation cancelled."));
-      process.exit(0);
-    }
-
-    port = portInput;
-  }
-
-  // Get description
-  const descriptionInput = await prompts.text({
-    message: "Service description:",
-    placeholder: `${serviceName.charAt(0).toUpperCase() + serviceName.slice(1)} microservice`,
-    defaultValue: `${serviceName.charAt(0).toUpperCase() + serviceName.slice(1)} microservice${withTemporal ? " with Temporal workflows" : ""}`,
-  });
-
-  if (prompts.isCancel(descriptionInput)) {
-    console.log(chalk.yellow("\nOperation cancelled."));
-    process.exit(0);
-  }
-
-  // Optional modules
-  let includeEmail = options.withEmail;
-  let includePayment = options.withPayment;
-
-  if (includeEmail === undefined || includePayment === undefined) {
-    const modules = await prompts.multiselect({
-      message: "Include optional modules:",
-      options: [
-        {
-          value: "email",
-          label: "Email (@projectx/email)",
-          hint: "SendGrid integration",
-        },
-        {
-          value: "payment",
-          label: "Payment (@projectx/payment)",
-          hint: "Stripe integration",
-        },
-      ],
-      required: false,
-    });
-
-    if (prompts.isCancel(modules)) {
-      console.log(chalk.yellow("\nOperation cancelled."));
-      process.exit(0);
-    }
-
-    includeEmail = modules.includes("email");
-    includePayment = modules.includes("payment");
-  }
-
-  // For Temporal services, get workflow name
-  let workflowName = "process";
-  if (withTemporal) {
-    const workflowInput = await prompts.text({
-      message: "Initial workflow name (camelCase):",
-      placeholder: "process",
-      defaultValue: "process",
-      validate: (value) => {
-        if (!value || value.trim() === "") return "Workflow name is required";
-        if (!/^[a-z][a-zA-Z0-9]*$/.test(value)) {
-          return "Must be camelCase (e.g., processOrder, handlePayment)";
-        }
-        return undefined;
-      },
-    });
-
-    if (prompts.isCancel(workflowInput)) {
-      console.log(chalk.yellow("\nOperation cancelled."));
-      process.exit(0);
-    }
-
-    workflowName = workflowInput;
-  }
-
-  // Confirmation
-  console.log(chalk.cyan("\n📋 Configuration Summary:\n"));
-  console.log(`  Service Name:  ${chalk.green(serviceName)}`);
-  console.log(`  Port:          ${chalk.green(port)}`);
-  console.log(`  Temporal:      ${chalk.green(withTemporal ? "Yes" : "No")}`);
-  if (withTemporal) {
-    console.log(`  Workflow:      ${chalk.green(workflowName)}`);
-  }
-  console.log(`  Email Module:  ${chalk.green(includeEmail ? "Yes" : "No")}`);
-  console.log(
-    `  Payment Module: ${chalk.green(includePayment ? "Yes" : "No")}`,
-  );
-
-  const confirm = await prompts.confirm({
-    message: "Generate service with these settings?",
-  });
-
-  if (prompts.isCancel(confirm) || !confirm) {
-    console.log(chalk.yellow("\nOperation cancelled."));
-    process.exit(0);
-  }
-
-  // Run Turborepo generator
-  const spinner = ora("Generating service files...").start();
-
+  const spinner = ora("Generating module...").start();
   try {
-    const generatorName = withTemporal
-      ? "nestjs-temporal-service"
-      : "nestjs-service";
-
-    // Build arguments for turbo gen
-    // Args are passed positionally in order of prompts (plop bypass feature)
-    // Order for nestjs-service: serviceName, port, description, includeEmail, includePayment
-    // Order for nestjs-temporal-service: serviceName, port, description, workflowName, includeEmail, includePayment
-    const args = ["gen", generatorName];
-
-    if (withTemporal) {
-      // nestjs-temporal-service prompt order: serviceName, port, description, workflowName, includeEmail, includePayment
-      args.push(
-        "--args",
-        serviceName,
-        "--args",
-        port,
-        "--args",
-        descriptionInput,
-        "--args",
-        workflowName,
-        "--args",
-        includeEmail ? "yes" : "no",
-        "--args",
-        includePayment ? "yes" : "no",
-      );
-    } else {
-      // nestjs-service prompt order: serviceName, port, description, includeEmail, includePayment
-      args.push(
-        "--args",
-        serviceName,
-        "--args",
-        port,
-        "--args",
-        descriptionInput,
-        "--args",
-        includeEmail ? "yes" : "no",
-        "--args",
-        includePayment ? "yes" : "no",
-      );
-    }
-
-    await execa("turbo", args, {
-      cwd: projectRoot,
-      stdio: "pipe",
-    });
-
-    spinner.succeed("Service files generated successfully!");
-
-    // Show next steps
-    console.log(chalk.cyan("\n✅ Service created successfully!\n"));
-    console.log(chalk.white("Next steps:\n"));
+    await runTurboGen(projectRoot, "module", [name, description]);
+    spinner.succeed("Module generated");
+    console.log(chalk.gray(`\n  Files: ${API_APP_DIR}/src/.../${name}/`));
     console.log(
       chalk.gray(
-        `  1. Add to .env: ${chalk.yellow(`${serviceName.toUpperCase().replace(/-/g, "_")}_PORT=${port}`)}`,
+        `  Next:  add a repository in @projectx/db, then ${chalk.yellow("pnpm dev:api")}`,
       ),
     );
-    console.log(
-      chalk.gray(`  2. Install dependencies: ${chalk.yellow("pnpm install")}`),
-    );
-    console.log(
-      chalk.gray(
-        `  3. Start the service: ${chalk.yellow(`pnpm dev:${serviceName}`)}`,
-      ),
-    );
-    console.log(
-      chalk.gray(
-        `\n  Service URL: ${chalk.blue(`http://localhost:${port}/${serviceName}`)}`,
-      ),
-    );
-    console.log(
-      chalk.gray(
-        `  Swagger docs: ${chalk.blue(`http://localhost:${port}/${serviceName}/docs`)}`,
-      ),
-    );
-    if (withTemporal) {
-      console.log(
-        chalk.gray(`  Temporal UI: ${chalk.blue("http://localhost:8080")}`),
-      );
-    }
   } catch (error) {
-    spinner.fail("Failed to generate service");
+    spinner.fail("Failed to generate the module");
     console.error(chalk.red("\nError:"), error);
     process.exit(1);
   }
@@ -328,110 +187,112 @@ async function generateService(
 
 async function generateWorkflow(
   projectRoot: string,
+  layout: ApiLayout,
   options: GenerateOptions,
 ): Promise<void> {
-  console.log(chalk.cyan("\n🔄 Adding new workflow...\n"));
+  console.log(chalk.cyan(`\n🔄 New Temporal workflow in ${API_APP_DIR}\n`));
+  const workflows = getWorkflows(layout);
+  const activities = getActivityNames(layout);
 
-  const temporalServices = getTemporalServices(projectRoot);
+  const name = await ask(options.name, {
+    message: "Workflow name (camelCase, e.g. sendReport):",
+    placeholder: "sendReport",
+    validate: (value) => {
+      if (!value || !CAMEL.test(value)) {
+        return "Use camelCase, starting with a lowercase letter";
+      }
+      if (workflows.includes(kebabCase(value))) {
+        return `${kebabCase(value)}.workflow.ts already exists`;
+      }
+      return undefined;
+    },
+  });
 
-  if (temporalServices.length === 0) {
-    console.error(
-      chalk.red(
-        "\nNo Temporal-enabled services found. Create one first with: projectx generate temporal-service",
-      ),
-    );
-    process.exit(1);
-  }
+  const defaultFeature = kebabCase(name);
+  const feature = await ask(
+    options.feature,
+    {
+      message: "Feature module that owns the activity (created if missing):",
+      placeholder: defaultFeature,
+      defaultValue: defaultFeature,
+      validate: (value) =>
+        !value || KEBAB.test(value)
+          ? undefined
+          : "Use lowercase letters, numbers and hyphens, starting with a letter",
+    },
+    options.yes,
+  );
 
-  // Get target service
-  let serviceName = options.service;
-  if (!serviceName) {
-    const serviceInput = await prompts.select({
-      message: "Which service should the workflow be added to?",
-      options: temporalServices.map((s) => ({ value: s, label: s })),
-    });
-
-    if (prompts.isCancel(serviceInput)) {
-      console.log(chalk.yellow("\nOperation cancelled."));
-      process.exit(0);
-    }
-
-    serviceName = serviceInput;
-  }
-
-  // Get workflow name
-  let workflowName = options.name;
-  if (!workflowName) {
-    const nameInput = await prompts.text({
-      message: "Workflow name (camelCase, e.g., checkout, refund):",
-      placeholder: "myWorkflow",
+  const defaultActivity = `run${pascalCase(name)}`;
+  const activity = await ask(
+    options.activity,
+    {
+      message: "Activity method name (camelCase):",
+      placeholder: defaultActivity,
+      defaultValue: defaultActivity,
       validate: (value) => {
-        if (!value || value.trim() === "") return "Workflow name is required";
-        if (!/^[a-z][a-zA-Z0-9]*$/.test(value)) {
-          return "Must be camelCase";
+        if (!value) return undefined;
+        if (!CAMEL.test(value)) return "Use camelCase";
+        if (activities.includes(value)) {
+          return `ActivitiesService already has ${value}`;
         }
         return undefined;
       },
-    });
+    },
+    options.yes,
+  );
 
-    if (prompts.isCancel(nameInput)) {
-      console.log(chalk.yellow("\nOperation cancelled."));
-      process.exit(0);
-    }
+  const defaultDescription = `Runs the ${kebabCase(name).replace(/-/g, " ")} process`;
+  const description = await ask(
+    options.description,
+    {
+      message: "Workflow description:",
+      placeholder: defaultDescription,
+      defaultValue: defaultDescription,
+    },
+    options.yes,
+  );
 
-    workflowName = nameInput;
-  }
-
-  // Get description
-  const descriptionInput = await prompts.text({
-    message: "Workflow description:",
-    placeholder: `Handles ${workflowName} process`,
-    defaultValue: `Handles ${workflowName} process`,
-  });
-
-  if (prompts.isCancel(descriptionInput)) {
-    console.log(chalk.yellow("\nOperation cancelled."));
-    process.exit(0);
-  }
+  console.log(chalk.cyan("\n📋 Summary:\n"));
+  console.log(`  Workflow:  ${chalk.green(`${name}Workflow`)}`);
+  console.log(
+    `  Activity:  ${chalk.green(`${pascalCase(feature)}Activities.${activity}`)}`,
+  );
+  console.log(`  Registry:  ${chalk.green(`ActivitiesService.${activity}`)}`);
+  await confirmOrExit(options);
 
   const spinner = ora("Generating workflow...").start();
-
   try {
-    // Args are passed positionally in order of prompts (plop bypass feature)
-    // Order for workflow: serviceName, workflowName, workflowDescription
-    await execa(
-      "turbo",
-      [
-        "gen",
-        "workflow",
-        "--args",
-        serviceName,
-        "--args",
-        workflowName,
-        "--args",
-        descriptionInput,
-      ],
-      {
-        cwd: projectRoot,
-        stdio: "pipe",
-      },
-    );
-
-    spinner.succeed("Workflow generated successfully!");
-
-    console.log(chalk.cyan("\n✅ Workflow created!\n"));
+    await runTurboGen(projectRoot, "workflow", [
+      name,
+      feature,
+      activity,
+      description,
+    ]);
+    spinner.succeed("Workflow generated");
+    const base = kebabCase(name);
     console.log(
       chalk.gray(
-        `  File: apps/${serviceName}/src/workflows/${workflowName}.workflow.ts`,
+        `\n  Workflow: ${API_APP_DIR}/src/workflows/${base}.workflow.ts`,
       ),
     );
     console.log(
       chalk.gray(
-        "\n  Don't forget to add your activity proxies and implement the workflow logic.",
+        `  Test:     ${API_APP_DIR}/src/workflows/${base}.workflow.spec.ts`,
+      ),
+    );
+    console.log(
+      chalk.gray(
+        `  Activity: ${feature}/${feature}.activities.ts (delegated from ActivitiesService)`,
+      ),
+    );
+    console.log(
+      chalk.gray(
+        `\n  Run the test: ${chalk.yellow(`pnpm --filter @projectx/api test -- --testPathPatterns ${base}.workflow`)}`,
       ),
     );
   } catch (error) {
-    spinner.fail("Failed to generate workflow");
+    spinner.fail("Failed to generate the workflow");
     console.error(chalk.red("\nError:"), error);
     process.exit(1);
   }

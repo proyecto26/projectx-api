@@ -1,6 +1,6 @@
 ---
 name: temporal
-description: This skill should be used when the user asks to "create a Temporal workflow", "write a Temporal activity", "debug stuck workflow", "fix non-determinism error", "Temporal TypeScript", "workflow replay", "activity timeout", "signal workflow", "query workflow", "worker not starting", "activity keeps retrying", "Temporal heartbeat", "continue-as-new", "child workflow", "saga pattern", "workflow versioning", "durable execution", "reliable distributed systems", mentions Temporal SDK development or implementing Temporal stuff (workflows, workers, activities), managing queries, updates and signals for existing workflows or updating the configuration for the Temporal worker and clients from our package packages/workflows such as WorkflowsModule, WorkerService, ClientService, or Workflow utils.
+description: This skill should be used when the user asks to "create a Temporal workflow", "write a Temporal activity", "debug stuck workflow", "fix non-determinism error", "Temporal TypeScript", "workflow replay", "activity timeout", "signal workflow", "query workflow", "worker not starting", "activity keeps retrying", "Temporal heartbeat", "continue-as-new", "child workflow", "saga pattern", "workflow versioning", "durable execution", "reliable distributed systems", mentions Temporal SDK development or implementing Temporal stuff (workflows, workers, activities), managing queries, updates and signals for existing workflows or wiring activities into the apps/api ActivitiesService registry, or configuring the Temporal worker and client from the npm package @proyecto26/temporal-workflows (WorkflowsModule, WorkerService, ClientService, workflow utils; developed in the ProjectX repo).
 allowed-tools: Read, Grep, Glob, Edit, Write
 version: 0.1.0
 ---
@@ -73,20 +73,65 @@ See `references/core/determinism.md` for detailed explanation.
 
 ## Workflows Location
 
-Temporal workflows and activities are located inside the NestJS apps in this monorepo.
+Temporal workflows and activities live inside the single NestJS app, `apps/api`. The worker and client run in the same process, wired by `WorkflowsModule` from `@proyecto26/temporal-workflows`. That package (with `WorkerService` and `ClientService`) is consumed from npm; its source is developed in the ProjectX repo (github.com/proyecto26/projectx, `packages/workflows`), so fixes to the wrapper go there, not here.
+
 ```
-apps/<NESTJS_APP>/
+apps/api/
 ├── src/
-│   ├── workflows/  # Workflow definitions
-│   ├── main.ts     # Export activities to be used in workflows (export * from "./app/activities/activities.service")
-│   ├── config
-│   │   └── temporal.config.ts       # Temporal configuration (host, namespace, taskQueue)
-│   └── app/
-│       ├── activities/              # Activity implementations
-│       │   ├── activities.module.ts # Module to export services
-│       │   └── activities.service.ts # Service to define the activities used in the workflows
-│       └── app.module.ts            # Import WorkflowsModule.registerAsync to configure workflows and activities
-└── nest-cli.json                    # compilerOptions.assets include the path src/workflows/**/*
+│   ├── workflows/                    # Workflow definitions (bundled by the worker)
+│   │   ├── index.ts                  # Barrel: export * from "./<name>.workflow"
+│   │   └── login.workflow.ts         # Email OTP login (the reference workflow)
+│   ├── activities/
+│   │   ├── activities.module.ts      # Imports every feature module that provides activities
+│   │   └── activities.service.ts     # The single activity registry the worker registers
+│   ├── app/
+│   │   ├── app.module.ts             # WorkflowsModule.registerAsync({ imports: [ActivitiesModule], ... })
+│   │   └── <feature>/                # e.g. auth/ (login activities), user/
+│   │       ├── <feature>.module.ts       # Provides and exports <Feature>Activities
+│   │       └── <feature>.activities.ts   # Injectable class with the real activity code
+│   └── config/temporal.config.ts     # host, namespace, taskQueue
+└── nest-cli.json                     # compilerOptions.assets include src/workflows/**/*
+```
+
+Signal, query and update definitions shared between workflows and controllers live in `packages/core` (`@projectx/core/workflows`), e.g. `getLoginStateQuery` and `verifyLoginCodeUpdate`.
+
+## Activity Registration Contract
+
+The worker registers the methods found on the **immediate prototype** of one `ActivitiesService` instance (`Object.getOwnPropertyNames(Object.getPrototypeOf(service))`). Methods inherited from a base class or attached elsewhere are not registered. So:
+
+1. Feature activities live in their module as an injectable class, `<feature>.activities.ts`, which that feature module provides **and exports**.
+2. `ActivitiesModule` imports the feature module.
+3. `ActivitiesService` injects the class in its constructor and exposes **one delegating method per activity**.
+4. Workflows proxy activities with `proxyActivities<ActivitiesService>(...)`, importing the type only.
+
+`pnpm gen:workflow` (or `pnpm cli generate workflow`) does all of this: it creates the workflow file and barrel export, the feature activity method, the module wiring, the delegating method in `ActivitiesService`, and a test that runs the workflow with `TestWorkflowEnvironment`. `pnpm test:generators` checks the generator end to end in a temp copy of the repo.
+
+```typescript
+// apps/api/src/app/report/report.activities.ts
+import { Injectable, Logger } from "@nestjs/common";
+
+@Injectable()
+export class ReportActivities {
+  private readonly logger = new Logger(ReportActivities.name);
+
+  async generateReport(input: { reportId: string }): Promise<{ url: string }> {
+    this.logger.log(`generateReport(${input.reportId})`);
+    // I/O goes here: database, HTTP, email...
+    return { url: `https://example.com/reports/${input.reportId}` };
+  }
+}
+
+// apps/api/src/activities/activities.service.ts
+@Injectable()
+export class ActivitiesService {
+  constructor(
+    @Inject(ReportActivities) private readonly reportActivities: ReportActivities,
+  ) {}
+
+  async generateReport(input: { reportId: string }) {
+    return this.reportActivities.generateReport(input);
+  }
+}
 ```
 
 ## Workflow Basics
@@ -96,135 +141,71 @@ Workflows are deterministic functions that orchestrate activities.
 ### Example Defining a Workflow
 
 ```typescript
-// apps/order/src/workflows/order.workflow.ts
+// apps/api/src/workflows/report.workflow.ts
 import {
-  proxyActivities,
-  sleep,
-  defineSignal,
-  setHandler,
   condition,
-} from '@temporalio/workflow';
-import type * as activities from '../activities';
+  defineQuery,
+  defineSignal,
+  proxyActivities,
+  setHandler,
+} from "@temporalio/workflow";
+import type { ActivitiesService } from "../activities/activities.service";
 
-const { processPayment, sendOrderConfirmation, updateInventory, notifyShipping } =
-  proxyActivities<typeof activities>({
-    startToCloseTimeout: '5 minutes',
-    retry: {
-      maximumAttempts: 3,
-      initialInterval: '1 second',
-      backoffCoefficient: 2,
-    },
-  });
+const { generateReport, sendReportEmail } = proxyActivities<ActivitiesService>({
+  startToCloseTimeout: "5 minutes",
+  retry: {
+    maximumAttempts: 3,
+    initialInterval: "1 second",
+    backoffCoefficient: 2,
+  },
+});
 
-export const cancelOrderSignal = defineSignal('cancelOrder');
+export const cancelReportSignal = defineSignal("cancelReport");
+export const getReportStateQuery = defineQuery<ReportState>("getReportState");
 
-export interface OrderWorkflowInput {
-  orderId: string;
-  customerId: string;
-  items: Array<{ productId: string; quantity: number }>;
-  total: number;
+export interface ReportWorkflowInput {
+  reportId: string;
+  email: string;
 }
 
-export async function orderWorkflow(input: OrderWorkflowInput): Promise<string> {
+type ReportState = "PENDING" | "GENERATED" | "SENT" | "CANCELLED";
+
+export async function reportWorkflow(input: ReportWorkflowInput): Promise<ReportState> {
+  let state: ReportState = "PENDING";
   let cancelled = false;
 
-  setHandler(cancelOrderSignal, () => {
+  setHandler(cancelReportSignal, () => {
     cancelled = true;
   });
+  setHandler(getReportStateQuery, () => state);
 
-  // Step 1: Process payment
-  const paymentResult = await processPayment({
-    orderId: input.orderId,
-    amount: input.total,
-    customerId: input.customerId,
-  });
+  const { url } = await generateReport({ reportId: input.reportId });
+  state = "GENERATED";
 
-  if (!paymentResult.success) {
-    return 'PAYMENT_FAILED';
+  // Give the user one hour to cancel before the email goes out
+  if (await condition(() => cancelled, "1 hour")) {
+    state = "CANCELLED";
+    return state;
   }
 
-  // Check for cancellation
-  if (cancelled) {
-    // Refund payment
-    await refundPayment({ paymentId: paymentResult.paymentId });
-    return 'CANCELLED';
-  }
-
-  // Step 2: Update inventory
-  await updateInventory(input.items);
-
-  // Step 3: Send confirmation email
-  await sendOrderConfirmation({
-    orderId: input.orderId,
-    customerId: input.customerId,
-  });
-
-  // Step 4: Wait for shipping (with timeout)
-  await sleep('1 hour');
-  await notifyShipping({ orderId: input.orderId });
-
-  return 'COMPLETED';
+  await sendReportEmail({ email: input.email, url });
+  state = "SENT";
+  return state;
 }
 ```
 
-## Activities
+The real reference is `apps/api/src/workflows/login.workflow.ts`: it sends an OTP through an activity, exposes its state with a query, validates the code with an update, waits with `condition(..., LOGIN_WORKFLOW_TIMEOUT)` and finishes with `condition(allHandlersFinished)`.
 
-Activities are the building blocks that perform actual work (Steps of the workflows).
-
-### Defining Activities
+### Starting Workflows from NestJS
 
 ```typescript
-// apps/<NESTJS_APP>/src/app/activities/aproctivities.services.ts
-import { Inject, Injectable } from "@nestjs/common";
-import { StripeService } from "@projectx/payment";
+import { ClientService } from "@proyecto26/temporal-workflows";
 
-export interface ProcessPaymentInput {
-  orderId: string;
-  amount: number;
-  customerId: string;
-}
-
-export interface ProcessPaymentResult {
-  success: boolean;
-  paymentId?: string;
-  error?: string;
-}
-
-@Injectable()
-export class ActivitiesService {
-  constructor(
-    @Inject(StripeService) public readonly stripeService: StripeService,
-  ) {}
-
-  async function processPayment(
-    input: ProcessPaymentInput
-  ): Promise<ProcessPaymentResult> {
-    try {
-      const paymentIntent = await this.stripeService.createPaymentIntent({
-        amount: Math.round(input.amount * 100),
-        currency: 'usd',
-        metadata: {
-          orderId: input.orderId,
-          customerId: input.customerId,
-        },
-      });
-
-      return {
-        success: true,
-        paymentId: paymentIntent.id,
-      };
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Payment failed',
-      };
-    }
-  }
-
-  async function refundPayment(input: { paymentId: string }): Promise<void> {
-    await this.stripeService.refundPayment(input.paymentId);
-  }
-}
+await this.clientService.client?.workflow.start("reportWorkflow", {
+  args: [{ reportId, email }],
+  taskQueue: this.configService.get("temporal.taskQueue"),
+  workflowId: `report-${reportId}`,
+});
 ```
 
 ## Docker Setup
@@ -232,8 +213,9 @@ export class ActivitiesService {
 The project includes Temporal in docker-compose.yml:
 
 ```bash
-# Start Temporal server + UI
-docker-compose up -d temporal temporal-ui
+# Start Temporal server + UI (temporal-create-namespace provisions the
+# namespace and the Email search attribute before the api starts)
+docker compose up -d temporal temporal-create-namespace temporal-ui
 
 # Access Temporal UI
 open http://localhost:8080
@@ -247,4 +229,5 @@ open http://localhost:8080
 4. **Handle signals gracefully** - Check for signals at appropriate points
 5. **Use queries for state** - Don't expose internal state directly
 6. **Version workflows** - Use workflow versioning for updates
-7. **Test workflows** - Use Temporal's testing framework
+7. **Test workflows** - Use `@temporalio/testing` (`TestWorkflowEnvironment`) like the generated workflow tests
+8. **Register activities through ActivitiesService** - A method missing from its prototype is not an activity

@@ -1,67 +1,38 @@
-# ProjectX - Full-Stack E-Commerce Platform
+# ProjectX API - NestJS + Temporal API Template
 
 ## Project Overview
 
-This is a modern full-stack e-commerce platform built with a microservices architecture using TypeScript throughout.
+A domain-agnostic backend template: one NestJS app (`apps/api`, package `@projectx/api`) with passwordless email login driven by a Temporal workflow, JWT, users, role-based access control, health checks, Swagger, and a Temporal worker and client running in-process. No frontend. Forkers add their domain with `pnpm gen:module` and `pnpm gen:workflow`.
 
 ## Tech Stack
 
-### Monorepo
-- **Turborepo** for build orchestration and caching
-- **pnpm** (v12) as package manager
-- **Node.js** v24
-
-### Backend (NestJS Microservices)
-- **auth** - Authentication service (JWT, Passport)
-- **order** - Order management with Temporal workflows
-- **product** - Product catalog service
-
-### Frontend
-- **React Router v7** - Full-stack React with SSR
-- **Tailwind CSS v4** with DaisyUI
-- **TanStack Query** for data fetching
-- **Framer Motion** for animations
-
-### Database
-- **PostgreSQL** with PostGIS extension
-- **Prisma** ORM (v7)
-
-### Workflow Orchestration
-- **Temporal** for durable execution
-
-### Payments
-- **Stripe** integration
-
-### Email
-- **SendGrid** with MJML templates
-
-### Spec-Driven Development
-- **[OpenSpec](https://github.com/Fission-AI/OpenSpec)** for structured AI-assisted development
+- **Monorepo**: Turborepo, pnpm (v12), Node.js 24
+- **API**: NestJS 12 (`apps/api`): auth (email OTP via the login workflow, JWT with Passport), users, RBAC, health (Terminus), Swagger, Pino
+- **Workflows**: Temporal TypeScript SDK through `@proyecto26/temporal-workflows` (npm; developed and published from the ProjectX repo, github.com/proyecto26/projectx, `packages/workflows`)
+- **Database**: PostgreSQL with PostGIS, Prisma 7
+- **Email**: SendGrid with MJML templates (log transport when `SENDGRID_API_KEY` is empty in development)
 
 ## Project Structure
 
 ```
-projectx/
+projectx-api/
 ├── apps/
-│   ├── auth/           # NestJS auth microservice
-│   ├── order/          # NestJS order microservice
-│   ├── product/        # NestJS product microservice
-│   ├── storybook/      # Component documentation
-│   └── web/            # React Router v7 frontend
+│   └── api/                # NestJS app
+│       └── src/
+│           ├── activities/ # ActivitiesModule + ActivitiesService (the worker's activity registry)
+│           ├── app/        # AppModule and feature modules (auth, user, ...)
+│           ├── config/     # app/swagger/temporal config, env validation
+│           ├── temporal/   # Temporal health indicator
+│           └── workflows/  # Temporal workflows (login.workflow.ts)
 ├── packages/
-│   ├── cli/            # ProjectX interactive CLI
-│   ├── core/           # Shared NestJS modules
-│   ├── db/             # Prisma schema and client
-│   ├── email/          # Email templates (MJML + SendGrid)
-│   ├── models/         # Shared TypeScript models
-│   ├── payment/        # Stripe integration
-│   ├── ui/             # React component library
-│   ├── workflow-client/ # Connect JS apps to Temporal workflows (store, transports, React, SSE)
-│   └── workflows/      # Temporal workflow definitions
-├── openspec/
-│   ├── changes/        # Active OpenSpec changes (gitignored)
-│   └── specs/          # Committed specifications
-├── docs/               # Project documentation
+│   ├── cli/                # `pnpm cli` (init, info, generate)
+│   ├── core/               # Shared NestJS: JwtAuthGuard, Roles/RolesGuard, config, logger, health, swagger, workflow utils
+│   ├── db/                 # Prisma schema, migrations, seed, repository services
+│   ├── email/              # SendGrid + MJML templates, log transport
+│   └── models/             # DTOs, enums, validators
+├── turbo/generators/       # gen:module, gen:workflow + test/verify-workflow-generator.sh
+├── deployment/             # Temporal setup scripts, dynamic config
+├── docs/                   # Architecture and backend docs
 └── docker-compose.yml
 ```
 
@@ -69,106 +40,62 @@ projectx/
 
 ```bash
 # Development
-pnpm dev                    # Run all services in parallel
-pnpm dev:web               # Run frontend only
-pnpm dev:auth              # Run auth service only
+docker compose up -d        # db, elasticsearch, temporal, temporal-create-namespace, temporal-ui, builder, api
+pnpm dev:api                # Run the API on the host with hot reload
 
-# Building
-pnpm build                 # Build all packages
-pnpm build:web            # Build frontend
+# Build, lint, test
+pnpm build                  # Build all packages (pnpm build:api for the app and its deps)
+pnpm lint                   # Biome check (pnpm lint:fix to fix)
+pnpm typecheck
+pnpm test                   # Unit tests
+pnpm test:e2e               # E2E tests (needs the database)
+pnpm test:generators        # Run gen:module/gen:workflow in a temp copy, build and test the output
 
 # Database
-pnpm prisma:generate      # Generate Prisma client
-pnpm prisma:migrate:dev   # Run migrations (dev)
-pnpm prisma:seed          # Seed database
+pnpm prisma:generate        # Generate Prisma client
+pnpm prisma:migrate:dev     # Create/apply migrations (dev)
+pnpm prisma:migrate         # Apply migrations
+pnpm prisma:seed            # Roles (admin, user) + ADMIN_EMAILS promoted to admin
 
-# Testing
-pnpm test                  # Run all tests
-
-# Linting
-pnpm lint:fix             # Fix lint issues with Biome
-pnpm check                # Run Biome check
-
-# ProjectX CLI
-pnpm cli                   # Interactive mode
-pnpm cli generate service  # Create a basic NestJS microservice
-pnpm cli generate temporal-service  # Create a Temporal-enabled service
-pnpm cli generate workflow  # Add workflow to existing service
-pnpm cli init              # Initialize/customize the project
-pnpm cli info              # Display project information
-
-# Code Generators (Turbo)
-pnpm gen:service           # Basic NestJS service generator
-pnpm gen:temporal-service  # Temporal NestJS service generator
-pnpm gen:workflow          # Add workflow to existing service
-
-# OpenSpec (Spec-Driven Development)
-openspec new change "<name>"        # Create a new change
-openspec status --change "<name>"   # Check change status
-openspec instructions <id> --change "<name>"  # Get artifact instructions
+# Generators and CLI
+pnpm gen:module             # NestJS module in apps/api, registered in AppModule
+pnpm gen:workflow           # Workflow + activity + registry wiring + TestWorkflowEnvironment test
+pnpm cli                    # Interactive CLI (generate module|workflow, init, info)
 ```
-
-## OpenSpec Workflow
-
-Use OpenSpec slash commands for structured AI-assisted development:
-
-| Command | Description |
-|---------|-------------|
-| `/opsx:new` | Start a new change (proposal + spec + design + tasks) |
-| `/opsx:continue` | Create the next artifact step-by-step |
-| `/opsx:ff` | Fast-forward: generate all artifacts at once |
-| `/opsx:apply` | Implement tasks from a change |
-| `/opsx:verify` | Verify implementation matches specs |
-| `/opsx:archive` | Archive a completed change |
-| `/opsx:explore` | Thinking partner for exploring ideas |
-| `/opsx:sync` | Sync delta specs to main specs |
-
-**When to use**: Non-trivial features, multi-file changes, new services/workflows, refactoring.
 
 ## Code Style
 
-- **Biome** for linting and formatting (replaces ESLint/Prettier)
-- **Husky** + **lint-staged** for pre-commit hooks
-- TypeScript strict mode enabled
+- **Biome** for linting and formatting (no ESLint/Prettier)
+- **Husky** + **lint-staged** run Biome on commit
+- TypeScript strict mode; use `unknown`, never `any`
 
 ## Architecture Patterns
 
-### Backend Services
-- Each microservice is a NestJS application
-- Services communicate via HTTP/REST
-- Temporal handles long-running workflows (order processing)
-- Prisma for database access with repository pattern
-- Use `pnpm cli generate` to scaffold new services
+### Auth and RBAC
+- `POST /auth/login` starts `loginUserWorkflow` (one workflow id per email), which emails a 6 digit code and stores its hash in workflow state.
+- `POST /auth/verify-code` sends the `verifyLoginCode` update; on success the API returns a JWT.
+- `JwtAuthGuard` protects routes; `@Roles(RoleName.Admin)` with `@UseGuards(JwtAuthGuard, RolesGuard)` restricts them by role. `RolesGuard` loads roles from the database on each request (not from the JWT). `JwtStrategy` checks on every request that the token's account still exists and is `Active` (one indexed query), so suspending or deleting an account rejects its tokens at once with `401`, as the NestJS docs suggest for `validate()`. New users get `user`; the seed creates the roles and promotes `ADMIN_EMAILS`.
+- Modules: `apps/api/src/auth/` (login, verify code, login activities) and `apps/api/src/users/` (`GET|PATCH /users/me`, `GET /users` for admins). There is no global prefix; set `API_PREFIX` (e.g. `v1`) to add one (`/health` is excluded).
 
-### Frontend
-- React Router v7 with file-based routing
-- Server-side rendering (SSR) enabled
-- TanStack Query for server state management
-- Component library in `packages/ui` documented with Storybook
+### Temporal
+- `WorkflowsModule.registerAsync` (from `@proyecto26/temporal-workflows`) runs the worker and the client in the API process; task queue `TEMPORAL_TASK_QUEUE` (default `api`).
+- **Activity registration contract**: the worker registers the methods on the prototype of one `ActivitiesService` (`apps/api/src/activities/activities.service.ts`). Feature activities are injectable classes in their modules (`<feature>.activities.ts`), provided and exported by the feature module; `ActivitiesModule` imports that module; `ActivitiesService` injects the class and exposes one delegating method per activity. Workflows type proxies with `proxyActivities<ActivitiesService>()` (type-only import).
+- Signal, query and update definitions shared with the API live in `packages/core/src/lib/*/workflow.utils.ts` (`@projectx/core/workflows`).
+- Pattern: `proxyActivities` -> `setHandler` (queries/signals/updates) -> `condition` -> `condition(allHandlersFinished)`.
+- Use `pnpm gen:workflow` rather than wiring by hand.
 
-### Shared Packages
-- `@projectx/core` - NestJS shared modules (guards, interceptors)
-- `@projectx/db` - Prisma client and repository services
-- `@projectx/models` - Shared TypeScript types/interfaces
-- `@projectx/ui` - Reusable React components
-- `@proyecto26/temporal-workflows` - NestJS module for Temporal workers and clients (publishable)
-- `@proyecto26/temporal-workflow-client` - Framework agnostic client for Temporal workflows: React hooks, SSE and polling transports (publishable)
-- `@projectx/payment` - Stripe integration
-- `@projectx/email` - SendGrid + MJML templates
+### Database
+- Prisma schema: `packages/db/prisma/schema.prisma` (User, Role, UserRole, Permission, RolePermission). Repository services in `packages/db/src/lib`.
 
 ## Environment Variables
 
-See `.env.example` for required environment variables.
+See `.env.example`: `API_PORT`, `DATABASE_URL`/`POSTGRES_*`, `TEMPORAL_HOST`, `TEMPORAL_NAMESPACE`, `TEMPORAL_NAMESPACE_RETENTION`, `TEMPORAL_TASK_QUEUE`, `TEMPORAL_SEARCH_ATTRIBUTES`, `JWT_SECRET`, `ADMIN_EMAILS`, `SENDGRID_API_KEY`, `EMAIL_FROM`, `EMAIL_FROM_NAME`, `ALLOWED_ORIGINS`, `LOG_LEVEL`.
 
-## Docker Development
+## Docs
 
-```bash
-docker-compose up -d       # Start all services
-docker-compose down        # Stop all services
-```
-
-Services include: PostgreSQL + PostGIS, Temporal server + UI, Elasticsearch
+- `docs/architecture/README.md`, `docs/architecture/INFRASTRUCTURE.md`
+- `docs/backend/README.md`, `RULES.md`, `DATABASE.md`, `TEMPORAL.md`
 
 ## Interactive Playgrounds
 
-- **Temporal Workflow Builder**: `pnpm playground` then open `http://localhost:4343/` — Visual node-based workflow designer with LiteGraph.js, presets for common patterns, and Claude chat integration via temporal-playground MCP
+- **Temporal Workflow Builder**: `pnpm playground` then open `http://localhost:4343/`. Visual node-based workflow designer (React Flow) with presets and Claude chat through the temporal-playground MCP; it scans `apps/api/src/workflows` and the activity classes.

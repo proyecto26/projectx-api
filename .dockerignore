@@ -27,10 +27,8 @@ yarn-error.log
 .DS_Store
 Thumbs.db
 
-# Ignore repo files
-libs/frontend
-# Uncomment the following line to ignore the web app if running locally
-# apps/web
+# Local environment (docker compose passes it through env_file)
+.env
 
 # System Files
 .DS_Store

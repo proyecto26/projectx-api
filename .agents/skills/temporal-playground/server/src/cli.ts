@@ -4,7 +4,8 @@ const args = process.argv.slice(2);
 
 const portIndex = args.indexOf("--port");
 const defaultPort = 4343;
-const port = portIndex !== -1 ? parseInt(args[portIndex + 1], 10) : defaultPort;
+const port =
+  portIndex !== -1 ? Number.parseInt(args[portIndex + 1], 10) : defaultPort;
 const verbose = args.includes("--verbose") || args.includes("-v");
 const helpRequested = args.includes("--help") || args.includes("-h");
 
@@ -26,7 +27,9 @@ for the Temporal Workflow Builder HTML playground.
   process.exit(0);
 }
 
-console.error(`[temporal-playground] HTTP: http://localhost:${port} | MCP: stdio`);
+console.error(
+  `[temporal-playground] HTTP: http://localhost:${port} | MCP: stdio`,
+);
 
 startServer({ httpPort: port, verbose }).catch((err) => {
   console.error("[temporal-playground] Fatal error:", err);

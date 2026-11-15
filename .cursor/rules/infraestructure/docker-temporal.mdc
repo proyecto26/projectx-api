@@ -98,18 +98,19 @@ temporal-create-namespace:
       condition: service_healthy
   environment:
     - TEMPORAL_ADDRESS=temporal:7233
-    - DEFAULT_NAMESPACE=${TEMPORAL_NAMESPACE:-default}
-  entrypoint: /deployment/scripts/temporal/create-namespace.sh
+    - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-default}
+    - TEMPORAL_NAMESPACE_RETENTION=${TEMPORAL_NAMESPACE_RETENTION:-72h}
+    - TEMPORAL_SEARCH_ATTRIBUTES=${TEMPORAL_SEARCH_ATTRIBUTES:-}
   volumes:
-    - ./deployment:/deployment
-  restart: on-failure:5
+    - ./deployment/scripts/temporal:/scripts
+  entrypoint: [ "/bin/sh" ]
+  command: /scripts/create-namespace.sh
 ```
 ### What It Does
 1. Waits for Temporal server to be healthy
-2. Creates the default namespace
-3. Adds custom search attributes (OrderId, UserId, Email)
-4. Exits after successful creation
-5. Retries up to 5 times on failure
+2. Creates `TEMPORAL_NAMESPACE` (an existing namespace counts as success)
+3. Registers the `Email` search attribute plus any listed in `TEMPORAL_SEARCH_ATTRIBUTES` (`Name:Type,Name:Type`)
+4. Exits 0 on success and non-zero on any other error; the `api` service waits for it with `condition: service_completed_successfully`
 ## Deployment Scripts
 ### Schema Setup Script
 **Location:** `deployment/scripts/temporal/setup-postgres-es.sh`
@@ -121,17 +122,12 @@ temporal-create-namespace:
 - `ES_VERSION` - Elasticsearch version
 ### Namespace Creation Script
 **Location:** `deployment/scripts/temporal/create-namespace.sh`
-**Purpose:** Creates Temporal namespace and runs search attributes script
+**Purpose:** Creates the Temporal namespace and registers search attributes
 **Key Variables:**
 - `TEMPORAL_ADDRESS` - Temporal server address
-- `DEFAULT_NAMESPACE` - Namespace to create
-### Search Attributes Script
-**Location:** `deployment/scripts/temporal/search-attributes.sh`
-**Purpose:** Adds custom search attributes to Temporal
-**Custom Attributes:**
-- `OrderId` (Keyword)
-- `UserId` (Keyword)
-- `Email` (Keyword)
+- `TEMPORAL_NAMESPACE` - Namespace to create (default `default`)
+- `TEMPORAL_NAMESPACE_RETENTION` - Retention for a new namespace (default `72h`)
+- `TEMPORAL_SEARCH_ATTRIBUTES` - Extra search attributes
 **Uses:** Modern `temporal` CLI (not deprecated `tctl`)
 ## Dynamic Configuration
 ### Configuration File
@@ -224,12 +220,12 @@ docker compose up temporal-create-namespace
 1. Ensure Temporal server is healthy
 2. Check namespace script logs: `docker compose logs temporal-create-namespace`
 3. Verify `TEMPORAL_ADDRESS` is correct
-4. Check search attributes script exists
+4. Check the script exists: `deployment/scripts/temporal/create-namespace.sh`
 ### Search Attributes Not Created
 1. Check if namespace was created: View Temporal UI
-2. Verify search-attributes.sh script is executable
+2. Check `TEMPORAL_SEARCH_ATTRIBUTES` format (`Name:Type,Name:Type`)
 3. Check for errors in namespace creation logs
-4. Manually run: `docker compose exec temporal-create-namespace /deployment/scripts/temporal/search-attributes.sh`
+4. Re-run: `docker compose run --rm temporal-create-namespace`
 ## Best Practices
 1. **Don't change image versions** - They are tested and working
 2. **Let setup scripts complete** - They exit automatically when done
@@ -239,7 +235,6 @@ docker compose up temporal-create-namespace
 6. **Use modern temporal CLI** - Not deprecated `tctl`
 ## References
 - Setup script: `deployment/scripts/temporal/setup-postgres-es.sh`
-- Namespace script: `deployment/scripts/temporal/create-namespace.sh`
-- Search attributes: `deployment/scripts/temporal/search-attributes.sh`
+- Namespace + search attributes script: `deployment/scripts/temporal/create-namespace.sh`
 - Dynamic config: `deployment/config/dynamicconfig/development.yaml`
 - Temporal docs: See `/docs/temporal-docker-update-summary.md`

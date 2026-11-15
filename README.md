@@ -1,451 +1,267 @@
-# ProjectX
+# ProjectX API
 
 <p align="center">
   <img width="100px" alt="Turborepo for Monorepo" src="https://user-images.githubusercontent.com/4060187/196936123-f6e1db90-784d-4174-b774-92502b718836.png">
-  <img width="100px" alt="React Router for Website" src="https://avatars.githubusercontent.com/u/64235328?s=200&v=4">
   <img width="300px" alt="ProjectX logo" src="https://github.com/user-attachments/assets/eecd8520-1e78-4ec7-8a12-55b62e5771c6">
-  <img width="100px" alt="NestJS for Services" src="https://avatars.githubusercontent.com/u/28507035?s=200&v=4">
+  <img width="100px" alt="NestJS for the API" src="https://avatars.githubusercontent.com/u/28507035?s=200&v=4">
   <img width="100px" alt="Temporal for Durable Executions" src="https://avatars.githubusercontent.com/u/56493103?s=200&v=4">
 </p>
 
-> **ProjectX** is a comprehensive full-stack template designed to simplify the development of scalable and resilient applications using **React** and **Temporal**. By integrating Temporal's advanced workflow orchestration with React's dynamic frontend framework, ProjectX enables developers to build applications with durable executions and seamless communication between services.
+> **ProjectX API** is a domain-agnostic template for building a backend with **NestJS** and **Temporal**. It ships one app, `apps/api`, with passwordless email login driven by a Temporal workflow, JWT sessions, users with role-based access control, health checks, Swagger, and a Temporal worker and client running in the same process. Bring your own domain: generators add modules and workflows that are wired, typed and tested from the first commit.
 
-<details>
-  <summary><h2>Features 🧰</h2></summary>
-  - ⏳ Temporal TypeScript SDK running from a Turborepo monorepo<br/>
-  - 🧭 React Router v7 (Framework mode) + React Query<br/>
-  - 🎨 TailwindCSS v4<br/>
-  - 🧱 NestJS for APIs & microservices<br/>
-  - 🐳 Docker setup to run everything locally on any machine<br/>
-  - 🤖 AI-first with Cursor Rules + MCP servers & Claude Subagents + Skills<br/>
-  - 📚 Storybook for building UI components<br/>
-  - 📧 MJML for lightning-fast email templates<br/>
-  - 🛒 Stripe for checkout & payments<br/>
-  - 🪝 Ngrok for local integrations and webhooks<br/>
-</details>
+It is the API-only sibling of [ProjectX](https://github.com/proyecto26/projectx), the full-stack e-commerce template. Both share the same conventions and the same Temporal wrapper.
 
-## Why Temporal? 🤔
+## Features
 
-<pre align="center" role="img" aria-label="ASCII Temporal">
-████████╗███████╗███╗   ███╗██████╗  ██████╗ ██████╗  █████╗ ██╗     
-╚══██╔══╝██╔════╝████╗ ████║██╔══██╗██╔═══██╗██╔══██╗██╔══██╗██║     
-   ██║   █████╗  ██╔████╔██║██████╔╝██║   ██║██████╔╝███████║██║     
-   ██║   ██╔══╝  ██║╚██╔╝██║██╔═══╝ ██║   ██║██╔══██╗██╔══██║██║     
-   ██║   ███████╗██║ ╚═╝ ██║██║     ╚██████╔╝██║  ██║██║  ██║███████╗
-   ╚═╝   ╚══════╝╚═╝     ╚═╝╚═╝      ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝
-</pre>
+- One NestJS 12 app (`apps/api`) in a Turborepo + pnpm monorepo
+- Email OTP login as a Temporal workflow (signals, queries and updates), then a JWT
+- Users, roles (`admin`, `user`) and a `RolesGuard` that reads roles from the database on every request
+- Temporal worker and client in-process through [`@proyecto26/temporal-workflows`](https://www.npmjs.com/package/@proyecto26/temporal-workflows)
+- PostgreSQL (PostGIS) with Prisma 7, repository services and a seed
+- SendGrid + MJML email templates, with a log transport for local development
+- `/health` that checks the database and Temporal (client, namespace and worker)
+- Swagger UI, Pino logging, Helmet, CORS, validation pipes
+- Generators: `pnpm gen:module` and `pnpm gen:workflow` (workflow + activity + test), checked in CI by `pnpm test:generators`
+- Docker Compose for everything: database, Temporal (with Elasticsearch and the UI) and the API
+- AI-ready: agent skills (NestJS, Prisma, Temporal, Turborepo) and a visual Temporal workflow playground
 
-### Challenges of Maintaining State in Distributed Systems
+## Why Temporal?
 
-- Consistency
-- Fault Tolerance
-- Scalability
-- Concurrency Control
-- Security
+Most backends grow processes that span time and systems: send a code and wait for the user, call a provider and retry, run a job every night, compensate when step three fails. Written as request handlers and cron jobs they turn into state machines spread across tables and queues.
 
-**Temporal** is introduced here as a **Workflow Orchestration** tool for managing long-running operations **(durable execution)**, human-in-the-loop and system lifecycle **(state management, guaranteed completion with compensations and uniqueness)**. 
-You can use **Temporal** today to implement sequences of steps/actions in a specific order for your business processes **(workflows)**, 
-not only for communication between services **(Microservices Orchestration)** but also within **Monolithic** apps. 
-**Workflows** can react to asynchronous and external events **(signals, updates)**, aggregate data and perform actions **(activities)** with exponential retries **(retry policy)** and run for extended periods **(heartbeat)** if needed, then you can check the state of these executions at any time **(queries)**.
-Additionally, workflows support scheduled and time-based executions with configurable delays to handle recurring business logic **(scheduling)**.
+**Temporal** runs those processes as code (**workflows**) with durable execution: state survives crashes and deploys, side effects (**activities**) are retried with backoff, and a workflow can wait for hours or months for an external event (**signals**, **updates**) while you inspect it at any time (**queries**). The login in this template is the smallest real example: the workflow emails a one-time code, waits for the user to submit it through an update, and finishes with the verified user.
 
-### Use Cases
+## Getting Started
 
-•	**Order Processing Systems:** Managing the lifecycle of orders from placement to fulfillment, including inventory checks, payment processing, and shipping.
-
-•	**User Onboarding:** Coordinating steps involved in onboarding new users, such as account creation, email verification, and initial setup tasks.
-
-•	**Data Pipelines:** Orchestrating data ingestion, transformation, and storage processes with reliability and scalability.
-
-•	**Batch Processing:** Handling large-scale batch jobs with retry mechanisms and progress monitoring.
-
-## Getting Started 🚀
-
-### Prerequisites 🧰
+### Prerequisites
 
 - [Docker Compose](https://docs.docker.com/compose/install)
 - [Node.js 24](https://nodejs.org) (24.9 or later; the Jest suites load the ESM-only NestJS 12 packages through `require(esm)`)
-- [Git](https://git-scm.com/downloads)
+- [pnpm](https://pnpm.io) (the version is pinned in `package.json`; `corepack enable` picks it up)
 
-### Quick Setup 🛠️
+### Quick start
 
-1. **Clone and Setup Environment:**
 ```bash
-git clone https://github.com/proyecto26/projectx.git
-cd projectx
+git clone https://github.com/proyecto26/projectx-api.git
+cd projectx-api
 cp .env.example .env
+
+# Database, Temporal, Elasticsearch, Temporal UI, builder (install, build, migrate, seed) and the api
+docker compose up -d
 ```
 
-2. **Start Development Environment:**
-```bash
-# Build and start all services (db, temporal, backend services)
-docker-compose up -d
+The API listens on `http://localhost:8081` (`API_PORT`), Swagger on `http://localhost:8081/swagger` and the Temporal UI on `http://localhost:8080`.
 
-# Install dependencies and start web application
+To run the API on the host instead (hot reload), start only the infrastructure and run it with pnpm:
+
+```bash
+docker compose up -d db temporal temporal-create-namespace temporal-ui
 pnpm install
-pnpm run dev:web
+pnpm prisma:generate && pnpm build   # Prisma client and the shared packages
+pnpm prisma:migrate && pnpm prisma:seed
+pnpm dev:api                         # builds its workspace dependencies first
 ```
 
-### Documentation 📚
+### Try the login
 
-For detailed information about the project, please refer to:
-- [Architecture Overview](./docs/architecture/README.md)
-- [Frontend Guide](./docs/frontend/README.md)
-- [Backend Guide](./docs/backend/README.md)
-
-## Project Structure Overview
-
-<img width="1204" alt="image" src="https://github.com/user-attachments/assets/6a82fc7a-178a-42e1-8d27-fbb353422793" />
-
-
-<details>
-  <summary><b>Markmap format 🍬</b></summary>
-
-```markmap
-#### Root Directory
-
-- **package.json**: Contains the dependencies and scripts for the entire monorepo.
-- **turbo.json**: Configuration for Turborepo, which manages the monorepo structure and build processes.
-- **tsconfig.json**: Base TypeScript configuration shared across the project.
-
-#### Apps
-
-- **apps/auth**: 
-  - **Purpose**: Handles user authentication and data retrieval.
-  - **Key Features**: Login, registration, and user profile management.
-
-- **apps/order**: 
-  - **Purpose**: Manages order processing, checkout, and payment handling.
-  - **Key Features**: Cart management, order tracking, and payment integration.
-
-- **apps/product**: 
-  - **Purpose**: Manages product catalog and inventory.
-  - **Key Features**: Product listing, details, and inventory management.
-
-- **apps/web**: 
-  - **Purpose**: The main web application interface.
-  - **Key Features**: User interaction with the system.
-  - **Configuration**: 
-    - **tsconfig.json**: TypeScript configuration specific to the web app.
-
-#### Packages
-
-- **packages/core**: 
-  - **Purpose**: Contains business logic and common utilities.
-  - **Key Features**: Shared functions and services used across backend applications.
-
-- **packages/db**: 
-  - **Purpose**: Manages database access using Prisma and the Repository pattern.
-  - **Key Features**: Database schema definitions and data access layers.
-  - **Documentation**: 
-    - **README.md**: Provides details on database setup and usage.
-
-- **packages/email**: 
-  - **Purpose**: Handles email template creation and sending.
-  - **Key Features**: Uses MJML for templates and provides email sending services.
-
-- **packages/models**: 
-  - **Purpose**: Defines DTOs and common types.
-  - **Key Features**: Ensures consistency across web and backend services.
-
-- **packages/ui**: 
-  - **Purpose**: Contains UI components and themes.
-  - **Key Features**: Built with React and TailwindCSS, includes Storybook for component visualization.
-  - **Configuration**: 
-    - **package.json**: Dependencies and scripts for the UI library.
-    - **tsconfig.json**: TypeScript configuration for the UI library.
-
-- **packages/workflows**: 
-  - **Purpose**: Temporal workflow orchestration utilities.
-  - **Key Features**: Shared workflow client and worker services.
-
-- **packages/payment**: 
-  - **Purpose**: Payment provider integrations.
-  - **Key Features**: Stripe and other payment gateway implementations.
-```
-</details>
-
-## Code Generators 🏗️
-
-ProjectX includes powerful Turborepo generators to scaffold new services quickly and consistently.
-
-### Available Generators
-
-| Command | Description |
-|---------|-------------|
-| `pnpm gen:service` | Create a basic NestJS microservice (like `product`) |
-| `pnpm gen:temporal-service` | Create a NestJS service with Temporal workflows (like `auth`, `order`) |
-| `pnpm gen:workflow` | Add a new workflow to an existing Temporal-enabled service |
-
-### Creating a New Service
-
-#### Basic Service (without Temporal)
-```bash
-pnpm gen:service
-```
-This will prompt you for:
-- Service name (e.g., `inventory`, `notification`)
-- Port number (auto-suggests next available)
-- Description
-- Optional modules (Email, Payment)
-
-#### Temporal-Enabled Service
-```bash
-pnpm gen:temporal-service
-```
-Additional prompts:
-- Initial workflow name (e.g., `process`, `handle`)
-
-### Adding a Workflow to Existing Service
-```bash
-pnpm gen:workflow
-```
-Select the target service and provide workflow details.
-
-### What Gets Generated
-
-**Basic Service:**
-```
-apps/{serviceName}/
-├── src/
-│   ├── app/
-│   │   ├── app.module.ts
-│   │   ├── app.controller.ts
-│   │   └── app.service.ts
-│   ├── config/
-│   │   ├── app.config.ts
-│   │   ├── env.config.ts
-│   │   └── swagger.config.ts
-│   └── main.ts
-├── test/
-├── package.json
-└── tsconfig.json
-```
-
-**Temporal Service (additional):**
-```
-├── src/
-│   ├── app/activities/
-│   │   ├── activities.module.ts
-│   │   └── activities.service.ts
-│   ├── config/
-│   │   └── temporal.config.ts
-│   └── workflows/
-│       ├── index.ts
-│       └── {workflowName}.workflow.ts
-```
-
-### Auto-Configuration
-
-The generators automatically:
-- Add `dev:{serviceName}` and `build:{serviceName}` scripts to root `package.json`
-- Update `docker-compose.yml` with the new service configuration
-- Configure the builder to include the new service in the build pipeline
-
-### Post-Generation Steps
-
-1. Add the environment variable to `.env`:
-   ```bash
-   {SERVICE_NAME}_PORT={port}
-   ```
-2. Install dependencies:
-   ```bash
-   pnpm install
-   ```
-3. Start the service:
-   ```bash
-   pnpm dev:{serviceName}
-   ```
-
-## ProjectX CLI 🖥️
-
-ProjectX includes an interactive CLI tool for a more developer-friendly experience when generating services and customizing the template.
-
-### Running the CLI
+With `SENDGRID_API_KEY` empty and `NODE_ENV=development`, emails are printed to the API logs instead of being sent.
 
 ```bash
-# Interactive mode (recommended)
-pnpm cli
+# 1. Request a code (starts the login workflow)
+curl -X POST http://localhost:8081/auth/login \
+  -H 'Content-Type: application/json' -d '{"email":"admin@example.com"}'
 
-# Or run specific commands
-pnpm cli generate service
-pnpm cli generate temporal-service
-pnpm cli generate workflow
-pnpm cli init
-pnpm cli info
+# 2. Read the 6 digit code from the logs
+docker compose logs api | grep -i code
+
+# 3. Verify it and get a JWT
+curl -X POST http://localhost:8081/auth/verify-code \
+  -H 'Content-Type: application/json' -d '{"email":"admin@example.com","code":123456}'
+
+# 4. Call a protected route
+curl http://localhost:8081/users/me -H "Authorization: Bearer <accessToken>"
 ```
 
-### CLI Commands
+`admin@example.com` is in `ADMIN_EMAILS`, so the seed made it an admin and `GET /users` (admin only) answers too. Any other email gets the `user` role and a `403` there.
 
-| Command | Description |
-|---------|-------------|
-| `pnpm cli` | Interactive mode - select what to do |
-| `pnpm cli generate [type]` | Generate service or workflow |
-| `pnpm cli init` | Initialize/customize project for your needs |
-| `pnpm cli info` | Display project information |
+## How it works
 
-### Initialize Command
+### Authentication flow
 
-The `init` command helps you customize the template for your own project:
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant A as apps/api
+    participant T as Temporal
+    participant W as Worker (in apps/api)
+
+    C->>A: POST /auth/login {email}
+    A->>T: start loginUserWorkflow (workflowId per email)
+    T->>W: sendLoginEmail activity
+    W-->>C: email with a 6 digit code (hashed in workflow state)
+    C->>A: POST /auth/verify-code {email, code}
+    A->>T: verifyLoginCode update
+    T->>W: verifyLoginCode activity (compare hash, get or create user)
+    W-->>T: user
+    T-->>A: user
+    A-->>C: JWT access token
+```
+
+The workflow lives in `apps/api/src/workflows/login.workflow.ts`; its queries and updates are defined in `@projectx/core/workflows`. The code expires after `LOGIN_WORKFLOW_TIMEOUT`.
+
+### Authorization (RBAC)
+
+- `JwtAuthGuard` (from `@projectx/core`) validates the token and sets `request.user`.
+- `@Roles(RoleName.Admin)` + `RolesGuard` restrict a route to roles. The guard loads the user's roles with one indexed query per request instead of trusting the token, so revoking a role takes effect immediately. The JWT strategy also checks that the account is still active, so suspending or deleting it rejects its tokens on the next request.
+- New users get the `user` role. `pnpm prisma:seed` creates the `admin` and `user` roles and promotes every email in `ADMIN_EMAILS` to `admin`.
+- `Permission` and `RolePermission` exist in the schema for fine-grained checks later; the guard checks role names only.
+
+```ts
+@Roles(RoleName.Admin)
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Controller("users")
+export class UsersController {}
+```
+
+### Temporal in the app
+
+`WorkflowsModule` from `@proyecto26/temporal-workflows` starts a worker (task queue `TEMPORAL_TASK_QUEUE`, default `api`) and a client inside the API process. The worker bundles `apps/api/src/workflows` and registers activities from one object, `ActivitiesService` (`apps/api/src/activities/activities.service.ts`): every method on its prototype becomes an activity. Feature activities are injectable classes in their modules (`<feature>.activities.ts`) and `ActivitiesService` delegates to them. See [docs/backend/TEMPORAL.md](./docs/backend/TEMPORAL.md).
+
+`@proyecto26/temporal-workflows` is consumed from npm. It is developed and published from the [ProjectX repository](https://github.com/proyecto26/projectx) (`packages/workflows`); report issues and send changes there.
+
+## Project structure
+
+```
+projectx-api/
+├── apps/
+│   └── api/                 # NestJS app: auth, users, health, swagger, Temporal worker + client
+│       └── src/
+│           ├── activities/  # ActivitiesModule + ActivitiesService (the worker's activity registry)
+│           ├── app/         # AppModule and feature modules (auth, user, ...)
+│           ├── config/      # app, swagger, temporal config + env validation
+│           ├── temporal/    # Temporal health indicator
+│           └── workflows/   # Temporal workflows (bundled for the worker)
+├── packages/
+│   ├── cli/                 # `pnpm cli`: init, info, generate
+│   ├── core/                # Shared NestJS: auth guards, RBAC, config, logger, health, swagger, workflow utils
+│   ├── db/                  # Prisma schema, migrations, seed and repository services
+│   ├── email/               # SendGrid + MJML templates, log transport
+│   └── models/              # DTOs, enums, validators shared by the packages
+├── turbo/generators/        # gen:module and gen:workflow templates + their CI check
+├── deployment/              # Temporal setup scripts and dynamic config
+├── docs/                    # Architecture and backend guides
+└── docker-compose.yml
+```
+
+## Common commands
 
 ```bash
-pnpm cli init
+pnpm dev:api              # Run the API with hot reload
+pnpm build                # Build everything (pnpm build:api for the app and its packages)
+pnpm lint                 # Biome (pnpm lint:fix to fix)
+pnpm typecheck
+pnpm test                 # Unit tests
+pnpm test:e2e             # E2E tests (needs the database)
+pnpm prisma:generate      # Generate the Prisma client
+pnpm prisma:migrate:dev   # Create/apply migrations in development
+pnpm prisma:migrate       # Apply migrations
+pnpm prisma:seed          # Roles + admins from ADMIN_EMAILS
 ```
 
-This allows you to:
-- **Rename the project**: Updates all package names and references from `@projectx/*` to `@your-project/*`
-- **Clean up example services**: Remove auth, order, product services to start fresh
-- **Update Docker configuration**: Adjust docker-compose.yml for your project name
-
-### Example Workflow
+## Adding a module
 
 ```bash
-# 1. Clone the template
-git clone https://github.com/proyecto26/projectx.git my-app
-cd my-app
-
-# 2. Customize for your project
-pnpm install
-pnpm cli init
-# - Enter your project name
-# - Select customizations (rename, cleanup, etc.)
-
-# 3. Generate your first service
-pnpm cli generate temporal-service
-# - Enter service name: "orders"
-# - Select port: 8084
-# - Add Email module: Yes
-# - Initial workflow: "processOrder"
-
-# 4. Start development
-docker-compose up -d
-pnpm dev
+pnpm gen:module           # or: pnpm cli generate module
 ```
 
-## Development Tools 🔧
+Creates `apps/api/src/<name>/` with a module, a JWT-protected controller, a service and a controller spec, and adds the module to `AppModule`. Add a repository in `packages/db` for persistence, DTOs in `packages/models`, and `@Roles(...)` with `RolesGuard` where a route needs a role.
 
-### Monorepo Management
+## Adding a workflow and its activity
+
 ```bash
-# View project structure
-pnpm list --recursive --only-projects
-
-# View dependency graph
-turbo run build --dry-run --graph
-
-# Run specific task across all packages
-turbo run build
-turbo run test
-turbo run lint
-
-# Run task for specific package
-turbo run build --filter=@projectx/core
-turbo run dev --filter=web
-
-# Clear Turborepo cache
-turbo run build --force
+pnpm gen:workflow         # or: pnpm cli generate workflow
 ```
 
-### UI Development
+Prompts for the workflow name (camelCase), the feature that owns the activity and the activity name, then:
+
+1. creates `apps/api/src/workflows/<name>.workflow.ts` and exports it from `workflows/index.ts`;
+2. adds the activity to `apps/api/src/<feature>/<feature>.activities.ts`, an injectable class provided and exported by its feature module (both created if the feature is new);
+3. imports the feature module in `ActivitiesModule`;
+4. injects the class in `ActivitiesService` and adds a method that delegates to it;
+5. creates `<name>.workflow.spec.ts`, which boots the real `ActivitiesModule`, registers activities the way the worker does and runs the workflow with `TestWorkflowEnvironment`.
+
+Start the workflow from a service with `ClientService` (see [docs/backend/TEMPORAL.md](./docs/backend/TEMPORAL.md)). `pnpm test:generators` runs both generators in a temporary copy of the repo, builds the app and runs the generated tests; CI runs it on every push.
+
+## ProjectX CLI
+
 ```bash
-# Run Storybook
-pnpm run storybook
+pnpm cli                      # Interactive mode
+pnpm cli generate module      # Same as gen:module (flags: -n, -d, -y)
+pnpm cli generate workflow    # Same as gen:workflow (flags: -n, -f, -a, -d, -y)
+pnpm cli info                 # Modules, workflows, activities and packages
+pnpm cli init                 # Rename @projectx/* to your scope and the Docker project
 ```
 
-### Package Management
+## Environment variables
+
+Copy `.env.example` to `.env`. The API validates its configuration at startup.
+
+| Variable | Purpose |
+|----------|---------|
+| `NODE_ENV` | `development`, `production` or `test` |
+| `API_PORT` | API port (default `8081`); `API_DEBUG_PORT` is the inspector port in Docker (`9229`) |
+| `DATABASE_URL` | PostgreSQL connection (built from `POSTGRES_*`) |
+| `TEMPORAL_HOST` | Temporal frontend address (`localhost:7233` on the host, `temporal:7233` in Compose) |
+| `TEMPORAL_NAMESPACE` | Namespace (default `default`), created by `temporal-create-namespace` with `TEMPORAL_NAMESPACE_RETENTION` |
+| `TEMPORAL_TASK_QUEUE` | Task queue of the worker and the client (default `api`) |
+| `TEMPORAL_SEARCH_ATTRIBUTES` | Extra search attributes, `Name:Type,...` (`Email:Keyword` is always registered) |
+| `JWT_SECRET` | Secret used to sign access tokens |
+| `ADMIN_EMAILS` | Comma separated emails the seed promotes to `admin` |
+| `SENDGRID_API_KEY` | SendGrid key; empty in development prints emails to the logs |
+| `EMAIL_FROM`, `EMAIL_FROM_NAME` | Sender of the emails (must be a verified SendGrid sender) |
+| `ALLOWED_ORIGINS` | Comma separated CORS origins |
+| `LOG_LEVEL` | Pino log level (default `info`) |
+
+## Docker
+
+`docker compose up -d` starts `db` (PostgreSQL + PostGIS), `elasticsearch`, `temporal-admin-tools`, `temporal`, `temporal-create-namespace` (namespace and search attributes), `temporal-ui`, `builder` (install, build, migrate, seed) and `api`, in that order of readiness.
+
 ```bash
-# Add dependency to specific package
-pnpm add <package> --filter=@projectx/core
-
-# Add dev dependency to root
-pnpm add -D <package> -w
-
-# Update all dependencies
-pnpm update --recursive
+docker compose logs -f api     # Follow the API
+docker compose down --volumes  # Stop and reset the database
+docker compose build --no-cache
 ```
 
-## Docker Configuration 🐳
+## Documentation
 
-Services defined in [docker-compose.yml](./docker-compose.yml):
-- PostgreSQL with PostGIS
-- Temporal server and UI
-- Auth, Order, and Product services
+- [Architecture](./docs/architecture/README.md) and [Infrastructure](./docs/architecture/INFRASTRUCTURE.md)
+- [Backend guide](./docs/backend/README.md), [rules](./docs/backend/RULES.md), [database](./docs/backend/DATABASE.md) and [Temporal](./docs/backend/TEMPORAL.md)
 
-### Common Commands
-```bash
-# Build fresh images
-docker-compose build --no-cache
+## Learning Temporal
 
-# Start services
-docker-compose up -d
-
-# Remove services and volumes
-docker-compose down --volumes
-```
-
-## Notable Links 🤓
-
-- [Get started with Temporal and TypeScript](https://github.com/temporalio/sdk-typescript)
-- [Workflow Messages - TypeScript SDK](https://docs.temporal.io/develop/typescript/message-passing)
-
-### Public Courses
-
+- [Temporal TypeScript SDK](https://github.com/temporalio/sdk-typescript)
+- [Workflow message passing (signals, queries, updates)](https://docs.temporal.io/develop/typescript/message-passing)
 - [Temporal 101 with TypeScript](https://temporal.talentlms.com/catalog/info/id:135)
 - [Temporal 102: Exploring Durable Execution with TypeScript](https://temporal.talentlms.com/catalog/info/id:165)
 - [Versioning Workflows with TypeScript](https://temporal.talentlms.com/catalog/info/id:171)
 - [Interacting with Workflows with TypeScript](https://temporal.talentlms.com/catalog/info/id:207)
 - [Securing Temporal Applications with TypeScript](https://temporal.talentlms.com/catalog/info/id:211)
-- [Introduction to Temporal Cloud](https://temporal.talentlms.com/catalog/info/id:144)
 - [Crafting an Error Handling Strategy with TypeScript](https://temporal.talentlms.com/catalog/info/id:244)
 
-## Payment Providers
-
-- Stripe:
-  - [Test Webhooks](https://dashboard.stripe.com/test/webhooks)
-  - [Stripe Webhook integration](https://docs.stripe.com/api/webhook_endpoints)
-  - [Stripe Checkout](https://docs.stripe.com/payments/checkout)
-  - [Webhooks Dashboard](https://dashboard.stripe.com/test/workbench/webhooks)
-  - [Automatic fulfillment Orders](https://docs.stripe.com/checkout/fulfillment)
-  - [Interactive webhook endpoint builder](https://docs.stripe.com/webhooks/quickstart)
-  - [Trigger webhook events with the Stripe CLI](https://docs.stripe.com/stripe-cli/triggers)
-  - [Testing cards](https://docs.stripe.com/testing#cards)
-- Stripe commands for testing webhooks:
-```bash
-brew install stripe/stripe-cli/stripe
-stripe login --api-key ...
-stripe trigger payment_intent.succeeded
-stripe listen --forward-to localhost:8081/order/webhook // or using the secure tunnel created by Ngrok
-```
-
-## Star History 🌟
-
-[![Star History Chart](https://api.star-history.com/svg?repos=proyecto26/projectx&type=Date)](https://star-history.com/#proyecto26/projectx&Date)
-
-## Sponsors 💜
+## Sponsors
 
 This project is free and open source. Sponsors help keep it maintained and growing.
 
 [**Become a Sponsor**](https://github.com/sponsors/proyecto26) | [Sponsorship Program](https://proyecto26.com/sponsors/)
 
-## Contribution 🤝
+## Contribution
 
-When contributing to this repository, please first discuss the change you wish to make via issue,
-email, or any other method with the owners of this repository before making a change.
- 
-Contributions are what make the open-source community such an amazing place to learn, inspire, and create. Any contributions you make are **greatly appreciated** ❤️.
- 
-You can learn more about how you can contribute to this project in the [contribution guide](https://github.com/proyecto26/.github/blob/master/CONTRIBUTING.md).
+When contributing to this repository, please first discuss the change you wish to make via issue, email, or any other method with the owners of this repository before making a change. You can learn more in the [contribution guide](https://github.com/proyecto26/.github/blob/master/CONTRIBUTING.md).
 
-## License ⚖️
+Changes to `@proyecto26/temporal-workflows` go to the [ProjectX repository](https://github.com/proyecto26/projectx).
+
+## License
+
 This repository is available under the [MIT License](./LICENSE).
 
-## Happy vibe coding 💯
-
 Made with ❤️ by [Proyecto 26](https://proyecto26.com)
-
-<pre role="img" aria-label="ASCII Made with Temporal">
-╔╦╗╔═╗╔╦╗╔═╗╔═╗╦═╗╔═╗╦   <img width="150px" src="https://avatars0.githubusercontent.com/u/28855608?s=200&v=4" align="right">
- ║ ║╣ ║║║╠═╝║ ║╠╦╝╠═╣║  
- ╩ ╚═╝╩ ╩╩  ╚═╝╩╚═╩ ╩╩═╝⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-</pre>
-
-

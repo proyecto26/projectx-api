@@ -109,16 +109,10 @@
   transform: rotate(-90deg);
 }
 .wf-project-icon {
-  @apply w-[18px] h-[18px] rounded flex items-center justify-center text-[9px] font-bold text-white shrink-0;
+  @apply w-[18px] h-[18px] rounded flex items-center justify-center text-[9px] font-bold text-white shrink-0 bg-cyan;
 }
-.wf-project-icon.order {
-  @apply bg-orange;
-}
-.wf-project-icon.auth {
+.wf-project-icon.api {
   @apply bg-purple;
-}
-.wf-project-icon.product {
-  @apply bg-cyan;
 }
 .wf-project-name {
   @apply text-[11px] text-text font-semibold capitalize truncate;

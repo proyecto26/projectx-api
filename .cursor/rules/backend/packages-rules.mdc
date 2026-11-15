@@ -1,11 +1,10 @@
 ---
-description: Rules for backend packages (core, db, email, payment, workflows)
+description: Rules for backend packages (core, db, email, models) and the npm package @proyecto26/temporal-workflows
 globs: 
   - packages/core/**/*
   - packages/db/**/*
   - packages/email/**/*
-  - packages/payment/**/*
-  - packages/workflows/**/*
+  - packages/models/**/*
 alwaysApply: true
 ---
 # Backend Packages Rules
@@ -25,14 +24,11 @@ alwaysApply: true
 - **Module System:** Dual (CJS + ESM via tsup)
 - **Exports:** EmailService, EmailModule
 - **Provider:** SendGrid
-### Payment (`@projectx/payment`)
-- **Purpose:** Stripe payment integration
-- **Module System:** Dual (CJS + ESM via tsup)
-- **Exports:** StripeService, PaymentModule
-- **Provider:** Stripe
-### Workflows (`@proyecto26/temporal-workflows`)
+### Models (`@projectx/models`)
+- **Purpose:** DTOs, enums, validators and transforms shared by the API and packages
+### Workflows (`@proyecto26/temporal-workflows`, npm dependency)
 - **Purpose:** Temporal workflow client and worker management
-- **Module System:** Dual (CJS + ESM via tsup)
+- **Source:** not in this repo; consumed from npm and developed in the ProjectX repo (github.com/proyecto26/projectx, `packages/workflows`)
 - **Exports:** ClientService, WorkerService, WorkflowsModule
 - **Integration:** Temporal.io
 ## Build Configuration
@@ -46,7 +42,7 @@ alwaysApply: true
 ```
 ### Build outputs:
 - `dist/index.js` - CommonJS (for NestJS apps)
-- `dist/index.mjs` - ESM (for web app)
+- `dist/index.mjs` - ESM
 - `dist/index.d.ts` - TypeScript declarations
 - Source maps for both formats
 ### Critical: Declaration files
@@ -58,9 +54,10 @@ tsc -p tsconfig.json --emitDeclarationOnly --outDir dist
 ## Package: @projectx/core
 ### Exports
 ```typescript
-// Authentication
+// Authentication and authorization
 export { AuthService } from './lib/auth/auth.service';
 export { JwtAuthGuard } from './lib/auth/auth.guard';
+export { Roles, RolesGuard } from './lib/auth'; // roles loaded from the DB per request
 export { JwtStrategy } from './lib/auth/jwt.strategy';
 export { AuthModule } from './lib/auth/auth.module';
 // Decorators
@@ -71,14 +68,11 @@ export { HealthModule } from './lib/health/health.module';
 export { createLoggerOptions } from './lib/logger';
 // Workflows (Temporal)
 export { 
+  getLoginStateQuery,
   verifyLoginCodeUpdate,
-  createOrderUpdate,
-  getOrderStateQuery,
-  cancelWorkflowSignal,
-  paymentWebHookEventSignal 
 } from './workflows';
 // Types
-export type { AuthUser, OrderWorkflowData, PaymentWebhookEvent };
+export type { AuthUser, LoginWorkflowData, LoginWorkflowState };
 ```
 ### AuthService
 ```typescript
@@ -130,7 +124,7 @@ export * from './generated/prisma';  // Prisma client types
 ### Usage:
 ```typescript
 import { PrismaService } from '@projectx/db';
-import { User, Product, Order } from '@projectx/db';
+import type { User } from '@projectx/db';
 @Injectable()
 export class UserService {
   constructor(private readonly prisma: PrismaService) {}
@@ -159,7 +153,6 @@ pnpm prisma migrate deploy
 export class EmailService {
   async sendEmail(options: SendEmailOptions): Promise<void>;
   async sendLoginEmail(email: string, code: string): Promise<void>;
-  async sendOrderConfirmation(email: string, order: Order): Promise<void>;
 }
 ```
 ### Configuration
@@ -176,40 +169,8 @@ import { EmailService } from '@projectx/email';
 constructor(private readonly emailService: EmailService) {}
 await this.emailService.sendLoginEmail(user.email, code);
 ```
-## Package: @projectx/payment
-### StripeService
-```typescript
-@Injectable()
-export class StripeService {
-  async createPaymentIntent(amount: number, metadata: object): Promise<PaymentIntent>;
-  async constructWebhookEvent(payload: Buffer, signature: string): Promise<Stripe.Event>;
-  async handleWebhookEvent(event: Stripe.Event): Promise<PaymentIntent | null>;
-}
-```
-### Configuration
-```typescript
-PaymentModule.forRoot({
-  secretKey: process.env.STRIPE_SECRET_KEY,
-  webhookSecret: process.env.STRIPE_WEBHOOK_SECRET,
-})
-```
-### Webhook handling:
-```typescript
-import { StripeService } from '@projectx/payment';
-@Post('webhook')
-async handleWebhook(
-  @Req() req: Request,
-  @Headers('stripe-signature') signature: string,
-) {
-  const event = this.stripeService.constructWebhookEvent(
-    req.body,  // Raw body required
-    signature,
-  );
-  const paymentIntent = this.stripeService.handleWebhookEvent(event);
-  // Process payment intent
-}
-```
-## Package: @proyecto26/temporal-workflows
+## Package: @proyecto26/temporal-workflows (from npm)
+Its source lives in the ProjectX repo; report wrapper bugs there. The shapes below are for reference.
 ### Critical: Module exports
 ```typescript
 @Module({
@@ -380,8 +341,7 @@ describe('MyService', () => {
 2. `db` (depends on models)
 3. `core` (depends on models, db)
 4. `email` (depends on models)
-5. `payment` (depends on models)
-6. `workflows` (depends on core)
+
 ### Turborepo handles this automatically
 ```bash
 pnpm turbo run build  # Builds in correct order
@@ -412,16 +372,11 @@ pnpm turbo run build  # Builds in correct order
 ### Document all public APIs
 ```typescript
 /**
- * Creates a payment intent with Stripe
- * @param amount - Amount in cents
- * @param metadata - Additional metadata for the payment
- * @returns Promise resolving to PaymentIntent
- * @throws {StripeError} If payment creation fails
+ * Finds the roles assigned to a user
+ * @param userId - The user id
+ * @returns Promise resolving to the role names
  */
-async createPaymentIntent(
-  amount: number,
-  metadata: Record<string, string>,
-): Promise<PaymentIntent> {
+async findRoles(userId: number): Promise<string[]> {
   // Implementation
 }
 ```

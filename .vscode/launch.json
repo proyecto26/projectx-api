@@ -5,61 +5,17 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Web",
-      "type": "node",
-      "request": "launch",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev:web"],
-      "outputCapture": "std",
-      "internalConsoleOptions": "openOnSessionStart",
-      "console": "internalConsole",
-      "cwd": "${workspaceFolder}",
-      "envFile": "${workspaceFolder}/.env"
-    },
-    {
-      "name": "Debug Auth Service",
+      "name": "Debug API",
       "type": "node",
       "request": "attach",
       "address": "localhost",
       "port": 9229,
       "restart": true,
       "sourceMaps": true,
-      "remoteRoot": "/app/apps/auth",
-      "localRoot": "${workspaceFolder}/apps/auth",
+      "remoteRoot": "/app/apps/api",
+      "localRoot": "${workspaceFolder}/apps/api",
       "outFiles": [
-        "${workspaceFolder}/apps/auth/dist/**/*.js",
-        "${workspaceFolder}/packages/**/dist/**/*.js"
-      ],
-      "skipFiles": ["<node_internals>/**"]
-    },
-    {
-      "name": "Debug Order Service",
-      "type": "node",
-      "request": "attach",
-      "address": "localhost",
-      "port": 9230,
-      "restart": true,
-      "sourceMaps": true,
-      "remoteRoot": "/app/apps/order",
-      "localRoot": "${workspaceFolder}/apps/order",
-      "outFiles": [
-        "${workspaceFolder}/apps/order/dist/**/*.js",
-        "${workspaceFolder}/packages/**/dist/**/*.js"
-      ],
-      "skipFiles": ["<node_internals>/**"]
-    },
-    {
-      "name": "Debug Product Service",
-      "type": "node",
-      "request": "attach",
-      "address": "localhost",
-      "port": 9231,
-      "restart": true,
-      "sourceMaps": true,
-      "remoteRoot": "/app/apps/product",
-      "localRoot": "${workspaceFolder}/apps/product",
-      "outFiles": [
-        "${workspaceFolder}/apps/product/dist/**/*.js",
+        "${workspaceFolder}/apps/api/dist/**/*.js",
         "${workspaceFolder}/packages/**/dist/**/*.js"
       ],
       "skipFiles": ["<node_internals>/**"]

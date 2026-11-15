@@ -7,9 +7,9 @@ export interface Preset {
 }
 
 export const PRESETS: Record<string, Preset> = {
-  payment: {
-    label: "Payment Processing",
-    desc: "Activity \u2192 Signal \u2192 Condition (order workflow pattern)",
+  approval: {
+    label: "Approval Request",
+    desc: "Activity \u2192 Child \u2192 Signal \u2192 Condition (approval pattern)",
     build: () => ({
       nodes: [
         {
@@ -17,13 +17,13 @@ export const PRESETS: Record<string, Preset> = {
           type: "start",
           position: { x: 50, y: 50 },
           data: {
-            workflowName: "createOrder",
+            workflowName: "approvalWorkflow",
             params: [
               {
                 name: "data",
-                type: "OrderData",
+                type: "ApprovalRequest",
                 required: true,
-                description: "Order workflow input data",
+                description: "Approval workflow input data",
                 defaultValue: "",
               },
             ],
@@ -34,7 +34,7 @@ export const PRESETS: Record<string, Preset> = {
           type: "activity",
           position: { x: 380, y: 50 },
           data: {
-            activityName: "createOrder",
+            activityName: "requestApproval",
             timeout: "5 seconds",
             maxAttempts: 10,
           },
@@ -44,8 +44,8 @@ export const PRESETS: Record<string, Preset> = {
           type: "childWorkflow",
           position: { x: 700, y: 50 },
           data: {
-            workflowName: "processPayment",
-            workflowId: "payment-{referenceId}",
+            workflowName: "notifyApprovers",
+            workflowId: "notify-{requestId}",
             args: "data",
           },
         },
@@ -54,24 +54,24 @@ export const PRESETS: Record<string, Preset> = {
           type: "condition",
           position: { x: 700, y: 250 },
           data: {
-            condition: "processPaymentResult.status === SUCCESS",
-            timeout: "15 minutes",
+            condition: "state.decision !== undefined",
+            timeout: "24 hours",
           },
         },
         {
           id: "p-end",
           type: "end",
           position: { x: 700, y: 430 },
-          data: { returnValue: "state (Confirmed or Failed)" },
+          data: { returnValue: "state (Approved, Rejected or Expired)" },
         },
         {
           id: "p-sig",
           type: "signal",
           position: { x: 380, y: 380 },
           data: {
-            signalName: "paymentWebhookEvent",
-            params: "event: PaymentWebhookEvent",
-            stateUpdates: "status",
+            signalName: "approvalDecision",
+            params: "decision: ApprovalDecision",
+            stateUpdates: "decision",
           },
         },
         {
@@ -79,8 +79,8 @@ export const PRESETS: Record<string, Preset> = {
           type: "query",
           position: { x: 50, y: 430 },
           data: {
-            queryName: "getOrderState",
-            returnType: "OrderStatusResponseDto",
+            queryName: "getApprovalState",
+            returnType: "ApprovalState",
           },
         },
         {
@@ -88,7 +88,7 @@ export const PRESETS: Record<string, Preset> = {
           type: "update",
           position: { x: 50, y: 570 },
           data: {
-            updateName: "createOrderUpdate",
+            updateName: "cancelApprovalUpdate",
             params: "(none)",
             async: false,
           },

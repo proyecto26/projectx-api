@@ -28,8 +28,6 @@
       "!**/*.css",
       "!**/*.scss",
       "!**/*.sass",
-      "!packages/ui/**/*.js",
-      "!packages/ui/**/*.d.ts",
       "!**/*.js.map",
       "!packages/db/generated"
     ],

@@ -4,15 +4,12 @@ import { useUIStore } from "../../store/ui-store";
 import { useWorkflowStore } from "../../store/workflow-store";
 import type { WorkflowMetadata } from "../../types";
 
+// Known apps get a friendly label; any other app falls back to its folder name
 const PROJECT_LABELS: Record<string, string> = {
-  order: "Order Service",
-  auth: "Auth Service",
-  product: "Product Service",
+  api: "API",
 };
 const PROJECT_INITIALS: Record<string, string> = {
-  order: "O",
-  auth: "A",
-  product: "P",
+  api: "A",
 };
 
 function WorkflowItem({ wf }: { wf: WorkflowMetadata }) {

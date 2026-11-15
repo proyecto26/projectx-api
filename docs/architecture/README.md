@@ -1,196 +1,125 @@
-# Project Architecture Overview
+# Architecture Overview
 
-This document provides a high-level overview of the ProjectX architecture, a full-stack event-driven application using Temporal workflows and React.
+ProjectX API is one NestJS application, `apps/api`, that serves HTTP and runs a Temporal worker in the same process. Shared code lives in workspace packages; the Temporal wrapper comes from npm.
 
-## System Architecture
+## System
 
 ```mermaid
 graph TB
-    subgraph Frontend
-        Web[Web App - React/React Query]
+    Client[HTTP client]
+
+    subgraph apps/api
+        HTTP[Controllers: auth, user, users, health]
+        TClient[Temporal client]
+        Worker[Temporal worker]
+        Registry[ActivitiesService]
+        Features[Feature activities: AuthActivities, ...]
     end
 
-    subgraph Backend
-        Auth[Auth Service]
-        Order[Order Service]
-        Product[Product Service]
-        Temporal[Temporal Server]
-        DB[(PostgreSQL)]
-        Email[Email Service]
-        Payment[Payment Service]
-    end
+    DB[(PostgreSQL + PostGIS)]
+    Temporal[Temporal server]
+    ES[(Elasticsearch)]
+    SendGrid[SendGrid / log transport]
 
-    Web --> Auth
-    Web --> Order
-    Web --> Product
-    Auth --> DB
-    Order --> DB
-    Product --> DB
-    Order --> Temporal
-    Order --> Payment
-    Order --> Email
-    Auth --> Email
-    Payment --> Stripe[Stripe API]
-    Email --> SendGrid[SendGrid API]
+    Client --> HTTP
+    HTTP --> TClient --> Temporal
+    Temporal --> Worker --> Registry --> Features
+    Features --> DB
+    Features --> SendGrid
+    HTTP --> DB
+    Temporal --> ES
 ```
 
-## Authentication Flow
+- **HTTP**: controllers validate DTOs from `@projectx/models` and call services; protected routes use `JwtAuthGuard` and, for roles, `RolesGuard`.
+- **Temporal client and worker**: `WorkflowsModule.registerAsync` from `@proyecto26/temporal-workflows` provides `ClientService` and `WorkerService`. The worker polls `TEMPORAL_TASK_QUEUE` (default `api`), bundles `src/workflows`, and registers the methods of `ActivitiesService` as activities.
+- **Database**: Prisma 7 with the PostgreSQL driver adapter, through repository services in `@projectx/db`.
+
+`@proyecto26/temporal-workflows` is consumed from npm; it is developed and published from the [ProjectX repository](https://github.com/proyecto26/projectx) (`packages/workflows`).
+
+## Authentication flow
 
 ```mermaid
 sequenceDiagram
     participant C as Client
-    participant A as Auth Service
-    participant E as Email Service
-    participant O as Order Service
-
-    C->>A: POST /login (email)
-    A->>E: Send verification code
-    E-->>C: Email with code
-    C->>A: POST /verify-code
-    A-->>C: JWT Token
-    C->>O: Request with JWT
-    Note over O: Validate JWT
-    O-->>C: Protected Resource
-```
-
-## Event Flow - Payment Processing
-
-```mermaid
-sequenceDiagram
-    participant C as Client
-    participant O as Order Service
+    participant A as AppController
     participant T as Temporal
-    participant S as Stripe
-    participant E as Email Service
+    participant W as loginUserWorkflow
+    participant Act as AuthActivities
 
-    C->>O: Create Order
-    O->>T: Start Payment Workflow
-    T->>S: Create Payment Intent
-    S-->>T: Payment Intent Created
-    T->>C: Return Client Secret
-    C->>S: Complete Payment
-    S->>O: Webhook: Payment Success
-    O->>T: Signal Payment Status
-    T->>E: Send Confirmation Email
-    E-->>C: Email Sent
+    C->>A: POST /auth/login {email}
+    A->>T: start loginUserWorkflow (workflowId from email, Email search attribute)
+    T->>W: run
+    W->>Act: sendLoginEmail(email)
+    Act-->>C: email with a 6 digit code
+    Act-->>W: hashed code
+    C->>A: POST /auth/verify-code {email, code}
+    A->>W: update verifyLoginCodeUpdate(code)
+    W->>Act: verifyLoginCode(email, code, hash)
+    Act-->>W: user (get or create, role "user")
+    W-->>A: user
+    A-->>C: { accessToken, user }
 ```
 
-## Service Architecture
+The workflow waits for a valid code up to `LOGIN_WORKFLOW_TIMEOUT` and fails with `LoginCodeExpiredException` afterwards. The state can be read at any time with the `getLoginStateQuery` query. Outside development a SendGrid 401 fails the activity; in development with an empty `SENDGRID_API_KEY` the email (and the code) is written to the logs.
 
-### Auth Service (Port 8081)
-- JWT-based authentication
-- User management
-- Session handling
-- Public endpoints:
-  - `/login`: Email-based login
-  - `/verify-code`: Verify login code
-  - `/health`: Service health check
-
-### Order Service (Port 8082)
-- Order management
-- Payment processing
-- Webhook handling
-- Temporal workflow orchestration
-- Public endpoints:
-  - `/health`: Service health check
-- Protected endpoints (require JWT):
-  - `/order`: Create and manage orders
-  - `/order/:referenceId`: Get order status
-
-### Product Service (Port 8083)
-- Product catalog management
-- Inventory tracking
-- Product search and filtering
-- Public endpoints:
-  - `/health`: Service health check
-- Protected endpoints (require JWT):
-  - `/products`: List and manage products
-  - `/products/:id`: Get product details
-
-### Shared Libraries
-- `@projectx/core`: Core utilities and configurations
-  - Authentication middleware
-  - Health checks
-  - Common security setup
-- `@projectx/db`: Database access and models
-- `@projectx/email`: Email service integration
-- `@projectx/payment`: Payment provider integration
-- `@proyecto26/temporal-workflows`: Temporal workflow definitions
-
-## Data Flow
+## Authorization
 
 ```mermaid
 flowchart LR
-    subgraph User Flow
-        Login --> CreateOrder
-        CreateOrder --> ProcessPayment
-        ProcessPayment --> SendEmail
-    end
-
-    subgraph System Flow
-        A[Auth Service] --> D[(Database)]
-        O[Order Service] --> D
-        P[Product Service] --> D
-        O --> T[Temporal]
-        T --> P[Payment Service]
-        T --> E[Email Service]
-    end
+    Req[Request] --> JWT{JwtAuthGuard}
+    JWT -- invalid/missing --> R401[401]
+    JWT -- valid --> Roles{RolesGuard + @Roles}
+    Roles -- no @Roles --> OK[Handler]
+    Roles -- role found in DB --> OK
+    Roles -- role missing --> R403[403]
 ```
 
-## Security Architecture
+`RolesGuard` loads the user's roles with `UserRepositoryService.findRoles(userId)` on every request and stores them in `request.user.roles`. Roles are not put in the JWT, so revoking one takes effect on the next request. Roles: `admin` and `user` (seeded); `ADMIN_EMAILS` are promoted to `admin` by the seed.
 
-```mermaid
-flowchart TB
-    subgraph Authentication
-        Login[Login Request]
-        Verify[Verify Code]
-        JWT[JWT Token]
-    end
+Before that, `JwtStrategy.validate()` loads the token's account (`UserRepositoryService.findActiveById`) and rejects the token with `401` unless the account exists and is `Active`. Access tokens are stateless JWTs (12 days), so this lookup is what revokes them: suspending or deleting an account takes effect on its next request, with no denylist. This is the check the NestJS authentication docs suggest for `validate()`, and it matches what Better Auth does when banning a user (it deletes all of the user's sessions).
 
-    subgraph Authorization
-        Guard[JWT Guard]
-        Public[Public Endpoints]
-        Protected[Protected Endpoints]
-    end
+## Routes
 
-    Login --> Verify
-    Verify --> JWT
-    JWT --> Guard
-    Guard --> Protected
-    Public --> Response[Response]
-    Protected --> Response
-```
+Routes have no global prefix; set `API_PREFIX` (e.g. `v1`) to add one, `/health` stays excluded. Modules: `src/auth/` and `src/users/`.
 
-## Technology Stack
-- **Frontend**: React, React Query, TailwindCSS
-- **Backend**: NestJS, TypeScript
-- **Database**: PostgreSQL
-- **Workflow Engine**: Temporal
-- **Payment Processing**: Stripe
-- **Email Service**: SendGrid
-- **Development Tools**: Docker, Turbo Monorepo
+| Route | Access | Description |
+|-------|--------|-------------|
+| `POST /auth/login` | public | Start the login workflow, email a code |
+| `POST /auth/verify-code` | public | Verify the code, return a JWT |
+| `GET /users/me`, `PATCH /users/me` | JWT | Read and update the current user |
+| `GET /users` | JWT + `admin` | List users (example admin route) |
+| `GET /health` | public | Database, memory and Temporal readiness |
+| `/swagger` | public | Swagger UI |
 
-## Environment Configuration
-Each service requires specific environment variables:
+## Activity registration
 
-### Auth Service
-- `AUTH_PORT`: Service port (default: 8081)
-- `JWT_SECRET`: Secret for JWT signing
-- `SENDGRID_API_KEY`: For email notifications
+The worker registers activities from one object: the functions on the immediate prototype of `ActivitiesService` (`apps/api/src/activities/activities.service.ts`). To keep features separate while respecting that:
 
-### Order Service
-- `ORDER_PORT`: Service port (default: 8082)
-- `JWT_SECRET`: Same secret as Auth service
-- `STRIPE_SECRET_KEY`: Stripe API key
-- `STRIPE_WEBHOOK_SECRET`: Stripe webhook signing secret
-- `SENDGRID_API_KEY`: For email notifications
+1. Each feature writes its activities in an injectable class, `<feature>.activities.ts`, provided and exported by its module (e.g. `AuthActivities` in `AuthActivitiesModule`).
+2. `ActivitiesModule` imports those modules and provides `ActivitiesService`.
+3. `ActivitiesService` injects each class and declares one method per activity that delegates to it.
+4. Workflows type their proxies with `proxyActivities<ActivitiesService>()` through a type-only import.
 
-### Product Service
-- `PRODUCT_PORT`: Service port (default: 8083)
-- `JWT_SECRET`: Same secret as Auth service
+`pnpm gen:workflow` generates all four steps and a test. `discoverActivities` (`apps/api/src/activities/discover-activities.ts`) reproduces the worker's discovery for tests.
 
-## Health Monitoring
-Both services implement health checks that monitor:
-- Database connectivity
-- Memory usage (heap and RSS)
-- External service dependencies 
+## Health
+
+`GET /health` (Terminus) checks the database, heap and RSS, and Temporal through `TemporalHealthIndicator` (`apps/api/src/temporal`): the client is connected, the namespace describes and, when the wrapper reports it, the worker is running. Docker Compose uses it as the API's healthcheck.
+
+## Packages
+
+| Package | Contents |
+|---------|----------|
+| `@projectx/core` | Bootstrap (`bootstrapApp`), CoreModule, JWT strategy and guard, `Roles`/`RolesGuard`, config validation, logger, health, Swagger, hashing, workflow definitions (`@projectx/core/workflows`) |
+| `@projectx/db` | Prisma schema, migrations, seed, `PrismaService`, repository services |
+| `@projectx/models` | DTOs, enums (`Environment`, `RoleName`, `UserStatus`), validators, transforms |
+| `@projectx/email` | `EmailService`, MJML templates, SendGrid and log transports |
+| `@projectx/cli` | `pnpm cli` (init, info, generate) |
+
+## Technology stack
+
+- **API**: NestJS 12, TypeScript (strict), Passport JWT, Terminus, Swagger, Pino
+- **Workflows**: Temporal (server 1.32, TypeScript SDK 1.25) through `@proyecto26/temporal-workflows`
+- **Database**: PostgreSQL 17 + PostGIS, Prisma 7
+- **Email**: SendGrid, MJML
+- **Tooling**: Turborepo, pnpm, Biome, Jest, Docker Compose

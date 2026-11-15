@@ -71,7 +71,7 @@ The user is discussing or requesting visual draft changes on the canvas. **DO NO
 1. **Respond in chat** -- call `temporal_respond` to acknowledge or ask clarifying questions
 2. **Update the canvas** -- call `temporal_update_canvas` to modify node properties visually. Example:
    ```json
-   { "updates": [{ "nodeType": "activity", "match": { "activityName": "reportPaymentConfirmed" }, "set": { "maxAttempts": 10 } }] }
+   { "updates": [{ "nodeType": "activity", "match": { "activityName": "sendLoginEmail" }, "set": { "maxAttempts": 10 } }] }
    ```
 3. **Confirm** -- call `temporal_respond` to summarize what was changed on the canvas
 4. **Call `temporal_clear`** and then `temporal_watch` again for the next prompt
@@ -82,7 +82,7 @@ The user wants to apply the current canvas state to actual code files.
 1. **Read the spec** -- it contains the full workflow structure
 2. **Respond in chat** -- call `temporal_respond` to confirm what will be changed
 3. **Use the temporal-docs MCP** -- query Temporal documentation for best practices
-4. **Implement** -- for new workflows use `pnpm cli generate workflow`, for existing ones edit the source file directly
+4. **Implement** -- for new workflows use `pnpm gen:workflow` (or `pnpm cli generate workflow`), which also wires the feature activity, the module and the `ActivitiesService` delegating method; for existing ones edit the source file directly
 5. **Respond with summary** -- call `temporal_respond` to confirm what was done
 6. **Call `temporal_clear`** and then `temporal_watch` again for the next prompt
 
@@ -97,7 +97,7 @@ The `temporal-docs` MCP server (`https://temporal.mcp.kapa.ai`) provides real-ti
 
 ## Dynamic workflow discovery
 
-The UI fetches `GET /api/workflows` on mount to populate the "Existing Workflows" sidebar. Workflows are grouped by service (order, auth, product) and clicking one converts the `WorkflowMetadata` into React Flow nodes/edges via `workflow-parser.ts`.
+The UI fetches `GET /api/workflows` on mount to populate the "Existing Workflows" sidebar. Workflows are grouped by app folder (in this template a single group, `api`, from `apps/api/src/workflows/*.workflow.ts`) and clicking one converts the `WorkflowMetadata` into React Flow nodes/edges via `workflow-parser.ts`.
 
 ## Spec generation
 
@@ -105,31 +105,31 @@ The playground generates two output formats:
 
 ### Natural Language (for Claude)
 ```
-Create a new Temporal workflow called "myWorkflow" for ProjectX.
-Task Queue: "order"
-Parameters: data: OrderWorkflowData
+Create a new Temporal workflow called "approvalWorkflow" for ProjectX.
+Task Queue: "api"
+Parameters: data: ApprovalRequest
 
 Execution Steps:
-  1. Activity: createOrder (timeout: 5s, retry: 10 attempts)
-  2. Child Workflow: processPayment (id: payment-{referenceId})
-  3. Wait: status === 'confirmed' (timeout: 15m)
+  1. Activity: requestApproval (timeout: 5s, retry: 10 attempts)
+  2. Child Workflow: notifyApprovers (id: notify-{requestId})
+  3. Wait: state.decision !== undefined (timeout: 24h)
 
 Signal Handlers:
-  - paymentWebhookEvent(event: PaymentWebhookEvent) -> updates: status
+  - approvalDecision(decision: ApprovalDecision) -> updates: decision
 
 Implementation Notes:
   - Import definitions from @projectx/core/workflows
   - Use proxyActivities<ActivitiesService>
-  - Follow patterns in apps/order/src/workflows/order.workflow.ts
+  - Follow patterns in apps/api/src/workflows/login.workflow.ts
 ```
 
 ### JSON (structured)
 ```json
 {
-  "workflowName": "myWorkflow",
+  "workflowName": "approvalWorkflow",
   "mode": "create",
   "source": null,
-  "taskQueue": "order",
+  "taskQueue": "api",
   "steps": [...],
   "signals": [...],
   "queries": [...],

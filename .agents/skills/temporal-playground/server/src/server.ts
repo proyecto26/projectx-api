@@ -282,7 +282,7 @@ function parseWorkflowFile(
   // Extract activities from proxyActivities
   const activities: ActivityInfo[] = [];
   const activityBlockRegex =
-    /const\s*\{([^}]+)\}\s*=\s*proxyActivities[^(]*\(\{([^}]+)\}\)/gs;
+    /const\s*\{([^}]+)\}\s*=\s*proxyActivities[^(]*\(\{([\s\S]*?)\}\s*\);/g;
   for (const actMatch of content.matchAll(activityBlockRegex)) {
     const names = actMatch[1]
       .split(",")
@@ -402,36 +402,74 @@ interface ScannedActivity {
   returnType: string;
 }
 
+/** Recursively collect `*.activities.ts` feature activity classes under a directory */
+function findFeatureActivityFiles(dir: string): string[] {
+  const files: string[] = [];
+  for (const entry of readdirSync(dir)) {
+    if (entry === "node_modules" || entry === "dist" || entry.startsWith("."))
+      continue;
+    const fullPath = join(dir, entry);
+    if (statSync(fullPath).isDirectory()) {
+      files.push(...findFeatureActivityFiles(fullPath));
+    } else if (entry.endsWith(".activities.ts")) {
+      files.push(fullPath);
+    }
+  }
+  return files;
+}
+
+/**
+ * Activities follow the registry contract: feature classes (`*.activities.ts`)
+ * hold the implementation and `activities/activities.service.ts` exposes one
+ * delegating method per activity. Both are scanned; when a name appears in
+ * both, the feature implementation wins.
+ */
 function scanActivities(projectRoot: string): ScannedActivity[] {
-  const results: ScannedActivity[] = [];
   const appsDir = join(projectRoot, "apps");
-  if (!existsSync(appsDir)) return results;
+  if (!existsSync(appsDir)) return [];
+
+  const byName = new Map<string, ScannedActivity>();
+  const addAll = (activities: ScannedActivity[], preferred: boolean) => {
+    for (const activity of activities) {
+      const key = `${activity.service}:${activity.name}`;
+      if (preferred || !byName.has(key)) byName.set(key, activity);
+    }
+  };
 
   for (const service of readdirSync(appsDir)) {
-    // Look for activity files in common locations
-    const searchPaths = [
-      join(appsDir, service, "src", "app", "activities"),
-      join(appsDir, service, "src", "activities"),
-    ];
+    const srcDir = join(appsDir, service, "src");
+    if (!existsSync(srcDir) || !statSync(srcDir).isDirectory()) continue;
 
-    for (const activitiesDir of searchPaths) {
+    // 1) ActivitiesService registries (delegating methods)
+    const registryDirs = [
+      join(srcDir, "activities"),
+      join(srcDir, "app", "activities"),
+    ];
+    for (const activitiesDir of registryDirs) {
       if (!existsSync(activitiesDir) || !statSync(activitiesDir).isDirectory())
         continue;
-
       for (const file of readdirSync(activitiesDir)) {
-        if (!file.endsWith(".service.ts") && !file.endsWith(".activities.ts"))
-          continue;
-
+        if (!file.endsWith(".service.ts")) continue;
         const filePath = join(activitiesDir, file);
-        const relPath = relative(projectRoot, filePath);
         const content = readFileSync(filePath, "utf-8");
-
-        results.push(...parseActivityFile(content, relPath, service));
+        addAll(
+          parseActivityFile(content, relative(projectRoot, filePath), service),
+          false,
+        );
       }
+    }
+
+    // 2) Feature activity classes anywhere under src/ (implementations)
+    for (const filePath of findFeatureActivityFiles(srcDir)) {
+      const content = readFileSync(filePath, "utf-8");
+      addAll(
+        parseActivityFile(content, relative(projectRoot, filePath), service),
+        true,
+      );
     }
   }
 
-  return results;
+  return [...byName.values()];
 }
 
 function parseActivityFile(
@@ -819,7 +857,7 @@ function createMcpServer(verbose: boolean): Server {
                   match: {
                     type: "object",
                     description:
-                      'Properties to match the target node, e.g. { "activityName": "reportPaymentConfirmed" }.',
+                      'Properties to match the target node, e.g. { "activityName": "sendLoginEmail" }.',
                   },
                   set: {
                     type: "object",
@@ -846,7 +884,7 @@ function createMcpServer(verbose: boolean): Server {
       {
         name: "temporal_scan_activities",
         description:
-          "Scan the monorepo for Temporal activity implementation files (*.service.ts under apps/*/src/app/activities/) and return metadata about each activity including method signatures, parameters with types, return types, and retry configuration from workflow files.",
+          "Scan the monorepo for Temporal activities: feature activity classes (*.activities.ts anywhere under apps/*/src/) and the ActivitiesService registry (apps/*/src/activities/*.service.ts). Returns metadata about each activity including method signatures, parameters with types, return types, and retry configuration from workflow files. When an activity appears in both, the feature implementation is reported.",
         inputSchema: {
           type: "object" as const,
           properties: {},
