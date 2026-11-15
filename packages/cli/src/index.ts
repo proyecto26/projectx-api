@@ -11,7 +11,7 @@ console.log(
   chalk.cyan(`
 ╔═══════════════════════════════════════════════════════════╗
 ║                                                           ║
-║   ${chalk.bold("ProjectX CLI")} - Temporal-Powered Full-Stack Template    ║
+║   ${chalk.bold("ProjectX API CLI")} - NestJS + Temporal API template     ║
 ║                                                           ║
 ╚═══════════════════════════════════════════════════════════╝
 `),
@@ -20,38 +20,40 @@ console.log(
 program
   .name("projectx")
   .description(
-    "CLI tool for ProjectX - Generate services, workflows, and customize your Temporal-powered application",
+    "CLI for the ProjectX API template: add modules and Temporal workflows to apps/api, customize the template",
   )
   .version(VERSION);
 
-// Generate command
 program
   .command("generate")
   .alias("g")
-  .description("Generate a new service or workflow")
-  .argument("[type]", "Type to generate: service | temporal-service | workflow")
-  .option("-n, --name <name>", "Name of the service or workflow")
-  .option("-p, --port <port>", "Port number for the service")
-  .option("--with-email", "Include Email module")
-  .option("--with-payment", "Include Payment module")
-  .option("-s, --service <service>", "Target service (for workflow generation)")
+  .description("Generate a module or a workflow in apps/api")
+  .argument("[type]", "Type to generate: module | workflow")
+  .option(
+    "-n, --name <name>",
+    "Module name (kebab-case) or workflow name (camelCase)",
+  )
+  .option(
+    "-f, --feature <feature>",
+    "Feature module that owns the workflow activity",
+  )
+  .option("-a, --activity <activity>", "Activity method name (workflow only)")
+  .option("-d, --description <description>", "Description")
+  .option("-y, --yes", "Skip the confirmation prompt")
   .action(generateCommand);
 
-// Init command - customize template for a new project
 program
   .command("init")
-  .description("Initialize and customize ProjectX for your project")
+  .description("Rename the workspace and the Docker project for your API")
   .option("-n, --name <name>", "Project name")
   .option("--skip-install", "Skip pnpm install")
   .action(initCommand);
 
-// Info command - show project information
 program
   .command("info")
-  .description("Display information about the current ProjectX setup")
+  .description("Display the app, its modules, workflows and activities")
   .action(infoCommand);
 
-// Interactive mode (default when no command specified)
 program
   .command("interactive", { isDefault: true })
   .description("Run in interactive mode")
@@ -62,29 +64,24 @@ program
       message: "What would you like to do?",
       options: [
         {
-          value: "service",
-          label: "Generate a basic NestJS service",
-          hint: "Without Temporal workflows",
-        },
-        {
-          value: "temporal-service",
-          label: "Generate a Temporal-enabled service",
-          hint: "With workflows and activities",
+          value: "module",
+          label: "Add a module",
+          hint: "NestJS module in apps/api, registered in AppModule",
         },
         {
           value: "workflow",
-          label: "Add a workflow to existing service",
-          hint: "Create a new workflow file",
+          label: "Add a workflow",
+          hint: "Temporal workflow + activity + test",
         },
         {
           value: "init",
           label: "Initialize/customize project",
-          hint: "Rename project, update configs",
+          hint: "Rename the workspace and Docker project",
         },
         {
           value: "info",
           label: "Show project info",
-          hint: "Display current setup",
+          hint: "Modules, workflows, activities",
         },
       ],
     });
@@ -95,14 +92,9 @@ program
     }
 
     switch (action) {
-      case "service":
-        await generateCommand("service", {});
-        break;
-      case "temporal-service":
-        await generateCommand("temporal-service", {});
-        break;
+      case "module":
       case "workflow":
-        await generateCommand("workflow", {});
+        await generateCommand(action, {});
         break;
       case "init":
         await initCommand({});

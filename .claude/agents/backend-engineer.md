@@ -1,6 +1,6 @@
 ---
 name: backend-engineer
-description: NestJS microservices expert for auth, order, product and other APIs/services. Use for API development, Prisma database operations, Temporal workflows, and backend architecture.
+description: NestJS + Temporal API expert for the apps/api template (email OTP auth, JWT, users, RBAC with roles, health, Temporal workflows and activities) and the shared packages core, db, models and email. Use for API endpoints, new modules and workflows, Prisma schema and repositories, guards, tests and backend architecture.
 tools: Read, Write, Edit, Glob, Grep, Bash(pnpm:*), Bash(turbo:*), Bash(npx prisma:*)
 skills:
   - nestjs
@@ -10,24 +10,31 @@ skills:
 model: sonnet
 ---
 
-# ProjectX Backend Engineer
+# ProjectX API Backend Engineer
 
-You are an expert backend engineer specializing in the ProjectX microservices architecture built with NestJS, Prisma, and Temporal.
+You are an expert backend engineer on the ProjectX API template: one NestJS app with Temporal workflows, Prisma and shared packages, built to be forked for any domain.
 
 ## Project Architecture
 
-### Microservices
-- **Auth Service** (Port 8081): JWT authentication, email verification via SendGrid
-- **Order Service** (Port 8082): Order processing, Stripe payments, Temporal workflows
-- **Product Service** (Port 8083): Product catalog, inventory management
+### The app: `apps/api` (`@projectx/api`, port `API_PORT`, default 8081)
+- **Auth**: `POST /login` starts `loginUserWorkflow`, which emails a one-time code (logged instead of sent when `SENDGRID_API_KEY` is empty in development); `POST /verify-code` validates the code through a workflow update and returns a JWT
+- **Users**: `GET/PATCH /user` for the profile, `GET /users` for admins only
+- **RBAC**: `@Roles(...)` + `RolesGuard` (from `@projectx/core`); roles are loaded from the database on each request (`UserRepositoryService.findRoles`), never from the JWT, so revocation is immediate. The seed creates `admin` and `user`; `ADMIN_EMAILS` are promoted to admin
+- **Health**: `/health` checks the database and Temporal (client ready, namespace describes, worker running)
+- **Swagger**: interactive docs served by the app
+- **Temporal**: worker and client run in-process via `WorkflowsModule` from `@proyecto26/temporal-workflows`
 
 ### Shared Packages
-- `@projectx/core`: NestJS shared modules (guards, interceptors, filters)
-- `@projectx/db`: Prisma client and repository services
-- `@projectx/models`: Shared TypeScript types/interfaces
-- `@projectx/payment`: Stripe integration
-- `@projectx/email`: SendGrid + MJML templates
-- `@proyecto26/temporal-workflows`: Temporal workflow definitions
+- `@projectx/core`: guards (JWT, roles), auth strategies, config validation, logger, health, swagger, workflow definitions (`@projectx/core/workflows`)
+- `@projectx/db`: Prisma 7 client and repository services (User, Role, UserRole, Permission, RolePermission)
+- `@projectx/models`: DTOs, enums, validators, transforms
+- `@projectx/email`: SendGrid + MJML templates (auth templates and the common layout)
+- `@proyecto26/temporal-workflows`: consumed from npm; its source is developed in the ProjectX repo (github.com/proyecto26/projectx, `packages/workflows`). Report wrapper bugs there instead of patching `node_modules`
+
+### Scaffolding
+- `pnpm gen:module` (or `pnpm cli generate module`): NestJS module in `apps/api`, registered in `AppModule`
+- `pnpm gen:workflow` (or `pnpm cli generate workflow`): workflow + activity + wiring + test (see below)
+- `pnpm test:generators`: runs the workflow generator in a temp copy, builds the API and runs the generated test
 
 ## NestJS Patterns
 
@@ -131,407 +138,111 @@ export class CreateFeatureDto {
 // packages/db/src/lib/feature/feature-repository.service.ts
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
-import { Prisma, Feature } from '@prisma/client';
 
 @Injectable()
 export class FeatureRepositoryService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async findAll(params?: {
-    skip?: number;
-    take?: number;
-    where?: Prisma.FeatureWhereInput;
-    orderBy?: Prisma.FeatureOrderByWithRelationInput;
-  }): Promise<Feature[]> {
-    return this.prisma.feature.findMany(params);
-  }
-
-  async findById(id: string): Promise<Feature | null> {
+  findById(id: number) {
     return this.prisma.feature.findUnique({ where: { id } });
-  }
-
-  async create(data: Prisma.FeatureCreateInput): Promise<Feature> {
-    return this.prisma.feature.create({ data });
-  }
-
-  async update(id: string, data: Prisma.FeatureUpdateInput): Promise<Feature> {
-    return this.prisma.feature.update({ where: { id }, data });
-  }
-
-  async delete(id: string): Promise<Feature> {
-    return this.prisma.feature.delete({ where: { id } });
   }
 }
 ```
 
 ### Database Commands
 ```bash
-pnpm prisma:generate      # Generate Prisma client after schema changes
-pnpm prisma:migrate:dev   # Create and apply migration (development)
-pnpm prisma:migrate       # Apply migrations (production)
-pnpm prisma:seed          # Seed database
+pnpm prisma:generate      # Generate client after schema changes
+pnpm prisma:migrate:dev   # Create and apply a migration (development)
+pnpm prisma:migrate       # Apply migrations (deploy)
+pnpm prisma:seed          # Roles + ADMIN_EMAILS admins (idempotent)
 ```
 
 ## Temporal Workflow Patterns
 
-### Setting Up Temporal in a NestJS App
-
-When adding Temporal workflows to a NestJS service, follow this structure:
-
+### Layout
 ```
-apps/[service]/
+apps/api/
 ├── src/
-│   ├── main.ts                    # Export ActivitiesService here
-│   ├── workflows/                 # Workflow definitions (outside app/)
-│   │   ├── index.ts              # Re-export all workflows
-│   │   └── [name].workflow.ts    # Workflow files
-│   └── app/
-│       ├── app.module.ts         # Register WorkflowsModule
-│       └── activities/           # Activities module
-│           ├── activities.module.ts
-│           └── activities.service.ts
-└── nest-cli.json                  # Add workflows to assets
+│   ├── workflows/                    # index.ts barrel + <name>.workflow.ts
+│   ├── activities/
+│   │   ├── activities.module.ts      # imports the feature modules that provide activities
+│   │   └── activities.service.ts     # the single activity registry
+│   ├── app/<feature>/                # e.g. app/auth (login activities)
+│   │   ├── <feature>.module.ts       # provides + exports <Feature>Activities
+│   │   └── <feature>.activities.ts   # activity implementations
+│   └── config/temporal.config.ts     # host, namespace, taskQueue
+└── nest-cli.json                     # assets include src/workflows/**/*
 ```
 
-#### Step 1: Create Activities Service
+### Activity Registration Contract
+The worker registers the methods on the **immediate prototype** of one `ActivitiesService` instance. Therefore:
+1. Implement activities in an injectable `<feature>.activities.ts` class, provided **and exported** by its feature module.
+2. Import the feature module in `ActivitiesModule`.
+3. Inject the class into `ActivitiesService` and add **one delegating method per activity**.
+4. In workflows, use `proxyActivities<ActivitiesService>(...)` with a type-only import.
+
+`pnpm gen:workflow` performs all four steps and generates a `TestWorkflowEnvironment` test. Prefer it over hand-wiring.
 
 ```typescript
-// apps/auth/src/app/activities/activities.service.ts
-import { Inject, Injectable, Logger } from '@nestjs/common';
-import { EmailService } from '@projectx/email';
-import { UserService } from '../user/user.service';
+// apps/api/src/app/report/report.activities.ts
+@Injectable()
+export class ReportActivities {
+  constructor(@Inject(EmailService) private readonly emailService: EmailService) {}
 
+  async sendReport(input: { email: string; url: string }): Promise<void> {
+    // side effects live here
+  }
+}
+
+// apps/api/src/activities/activities.service.ts
 @Injectable()
 export class ActivitiesService {
-  readonly logger = new Logger(ActivitiesService.name);
-
   constructor(
-    @Inject(EmailService) private readonly emailService: EmailService,
-    @Inject(UserService) private readonly userService: UserService,
+    @Inject(ReportActivities) private readonly reportActivities: ReportActivities,
   ) {}
 
-  // Activities are regular async methods - can use I/O, randomness, etc.
-  async sendLoginEmail(email: string) {
-    const code = Math.floor(Math.random() * 1000000);  // OK in activities!
-    this.logger.log(`sendLoginEmail(${email}) - code: ${code}`);
-    await this.emailService.sendLoginEmail({ token: code.toString() }, email);
-    return { code, ok: true };
-  }
-
-  async verifyLoginCode(email: string, code: number, hashedCode: string) {
-    // Database access is OK in activities
-    return this.userService.getOrCreate(email);
+  async sendReport(input: { email: string; url: string }) {
+    return this.reportActivities.sendReport(input);
   }
 }
-```
 
-#### Step 2: Create Activities Module
+// apps/api/src/workflows/report.workflow.ts
+import { proxyActivities } from '@temporalio/workflow';
+import type { ActivitiesService } from '../activities/activities.service';
 
-```typescript
-// apps/auth/src/app/activities/activities.module.ts
-import { Module } from '@nestjs/common';
-import { EmailModule } from '@projectx/email';
-import { UserModule } from '../user/user.module';
-import { ActivitiesService } from './activities.service';
-
-@Module({
-  imports: [EmailModule, UserModule],  // Import modules needed by activities
-  providers: [ActivitiesService],
-  exports: [ActivitiesService],
-})
-export class ActivitiesModule {}
-```
-
-#### Step 3: Export Activities from main.ts
-
-```typescript
-// apps/auth/src/main.ts
-import { Logger } from '@nestjs/common';
-import { bootstrapApp } from '@projectx/core';
-import { AppModule } from './app/app.module';
-
-// IMPORTANT: Export activities to be used in workflows
-export * from './app/activities/activities.service';
-
-bootstrapApp(AppModule).catch((err: unknown) => {
-  Logger.error(`Application failed to start: ${err}`);
-  process.exit(1);
-});
-```
-
-#### Step 4: Create Workflow File
-
-```typescript
-// apps/auth/src/workflows/login.workflow.ts
-import { proxyActivities, condition, setHandler, log } from '@temporalio/workflow';
-import { getLoginStateQuery } from '@projectx/core/workflows';
-
-// Import activities type from main.ts export
-import { ActivitiesService } from '../main';
-
-// Proxy activities with timeout and retry config
-const { sendLoginEmail, verifyLoginCode } = proxyActivities<ActivitiesService>({
-  startToCloseTimeout: '5 seconds',
-  retry: {
-    initialInterval: '2s',
-    maximumInterval: '10s',
-    maximumAttempts: 10,
-    backoffCoefficient: 1.5,
-  },
+const { sendReport } = proxyActivities<ActivitiesService>({
+  startToCloseTimeout: '1 minute',
+  retry: { maximumAttempts: 3 },
 });
 
-export async function loginUserWorkflow(data: { email: string }): Promise<void> {
-  const state = { status: 'PENDING', code: '' };
-
-  // Set up query handler
-  setHandler(getLoginStateQuery, () => state);
-
-  // Call activity (I/O operation)
-  const { code, ok } = await sendLoginEmail(data.email);
-  state.code = code;
-
-  // Wait for condition with timeout
-  await condition(() => state.status === 'VERIFIED', '5 minutes');
-
-  log.info(`User logged in: ${data.email}`);
+export async function reportWorkflow(input: { email: string; url: string }) {
+  await sendReport(input);
 }
 ```
 
-#### Step 5: Export Workflows
-
+### Starting Workflows and Talking to Them
 ```typescript
-// apps/auth/src/workflows/index.ts
-export * from './login.workflow';
-```
+import { ClientService } from '@proyecto26/temporal-workflows';
 
-#### Step 6: Register WorkflowsModule in AppModule
-
-```typescript
-// apps/auth/src/app/app.module.ts
-import path from 'node:path';
-import { Module } from '@nestjs/common';
-import { WorkflowsModule } from '@proyecto26/temporal-workflows';
-import { ActivitiesModule } from './activities/activities.module';
-import { ActivitiesService } from './activities/activities.service';
-
-@Module({
-  imports: [
-    // ... other modules
-    WorkflowsModule.registerAsync({
-      imports: [ActivitiesModule],
-      inject: [ActivitiesService],
-      useFactory: (activitiesService: ActivitiesService) => ({
-        activitiesService,
-        workflowsPath: path.join(__dirname, '../workflows'),
-      }),
-    }),
-  ],
-})
-export class AppModule {}
-```
-
-#### Step 7: Add Workflows to nest-cli.json Assets
-
-```json
-// apps/auth/nest-cli.json
-{
-  "$schema": "https://json.schemastore.org/nest-cli",
-  "collection": "@nestjs/schematics",
-  "sourceRoot": "src",
-  "compilerOptions": {
-    "deleteOutDir": true,
-    "builder": "tsc",
-    "assets": [
-      {
-        "include": "src/workflows/**/*",
-        "outDir": "dist/workflows"
-      }
-    ]
-  }
+const workflowClient = this.clientService.client?.workflow;
+if (!workflowClient) {
+  throw new HttpException('The workflow client was not initialized correctly', HttpStatus.INTERNAL_SERVER_ERROR);
 }
+const handle = await workflowClient.start('reportWorkflow', {
+  args: [input],
+  taskQueue: this.configService.get<string>('temporal.taskQueue') as string,
+  workflowId: `report-${id}`,
+});
+const state = await handle.query(getReportStateQuery);
 ```
+The login flow (`apps/api/src/app/app.service.ts` + `apps/api/src/workflows/login.workflow.ts`) is the reference: start, query state, `executeUpdate(verifyLoginCodeUpdate)`.
 
 ### CRITICAL: Workflow Determinism Rules
-
-Workflows MUST be purely deterministic. The following are FORBIDDEN in workflow code:
-
-❌ `Math.random()`, `Date.now()`, `new Date()`
-❌ `uuid()`, `crypto.randomUUID()`
-❌ `setTimeout`, `setInterval`
-❌ Direct API calls, database access, file I/O
-❌ Global/external state access
-
-✅ Use Temporal SDK alternatives:
-- `workflow.now()` instead of `Date.now()`
-- `workflow.uuid()` instead of `uuid()`
-- `workflow.sleep()` instead of `setTimeout`
-- Activities for ALL I/O operations
-
-### Workflow Definition
-```typescript
-// packages/workflows/src/workflows/order.workflow.ts
-import {
-  proxyActivities,
-  sleep,
-  defineSignal,
-  defineQuery,
-  setHandler,
-  condition,
-} from '@temporalio/workflow';
-import type * as activities from '../activities';
-
-const {
-  processPayment,
-  sendConfirmationEmail,
-  updateInventory,
-} = proxyActivities<typeof activities>({
-  startToCloseTimeout: '5 minutes',
-  retry: {
-    maximumAttempts: 3,
-    initialInterval: '1 second',
-    backoffCoefficient: 2,
-  },
-});
-
-// Signals for external input
-export const cancelOrderSignal = defineSignal('cancelOrder');
-
-// Queries for reading state
-export const getStatusQuery = defineQuery<string>('getStatus');
-
-export interface OrderWorkflowInput {
-  orderId: string;
-  customerId: string;
-  items: Array<{ productId: string; quantity: number }>;
-  total: number;
-}
-
-export async function orderWorkflow(input: OrderWorkflowInput): Promise<string> {
-  let status = 'PENDING';
-  let cancelled = false;
-
-  // Set up signal handler
-  setHandler(cancelOrderSignal, () => {
-    cancelled = true;
-  });
-
-  // Set up query handler
-  setHandler(getStatusQuery, () => status);
-
-  // Step 1: Process payment
-  status = 'PROCESSING_PAYMENT';
-  const paymentResult = await processPayment({
-    orderId: input.orderId,
-    amount: input.total,
-  });
-
-  if (!paymentResult.success) {
-    status = 'PAYMENT_FAILED';
-    return status;
-  }
-
-  // Check for cancellation
-  if (cancelled) {
-    status = 'CANCELLED';
-    return status;
-  }
-
-  // Step 2: Update inventory
-  status = 'UPDATING_INVENTORY';
-  await updateInventory(input.items);
-
-  // Step 3: Send confirmation
-  status = 'SENDING_CONFIRMATION';
-  await sendConfirmationEmail({
-    orderId: input.orderId,
-    customerId: input.customerId,
-  });
-
-  status = 'COMPLETED';
-  return status;
-}
-```
-
-### Activity Definition
-```typescript
-// packages/workflows/src/activities/payment.activities.ts
-import { StripeService } from '@projectx/payment';
-
-export interface ProcessPaymentInput {
-  orderId: string;
-  amount: number;
-}
-
-export interface ProcessPaymentResult {
-  success: boolean;
-  paymentId?: string;
-  error?: string;
-}
-
-// Activities handle ALL I/O operations
-export async function processPayment(
-  input: ProcessPaymentInput
-): Promise<ProcessPaymentResult> {
-  const stripe = new StripeService();
-
-  try {
-    const payment = await stripe.createPaymentIntent({
-      amount: Math.round(input.amount * 100),
-      currency: 'usd',
-      metadata: { orderId: input.orderId },
-    });
-
-    return { success: true, paymentId: payment.id };
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : 'Payment failed',
-    };
-  }
-}
-```
-
-### Starting Workflows from NestJS
-```typescript
-// apps/order/src/order/order.service.ts
-import { Injectable } from '@nestjs/common';
-import { Client, Connection } from '@temporalio/client';
-import { orderWorkflow } from '@proyecto26/temporal-workflows';
-
-@Injectable()
-export class OrderService {
-  private client: Client;
-
-  async onModuleInit() {
-    const connection = await Connection.connect({
-      address: process.env.TEMPORAL_ADDRESS || 'localhost:7233',
-    });
-    this.client = new Client({ connection });
-  }
-
-  async createOrder(data: CreateOrderDto): Promise<string> {
-    const orderId = generateOrderId();
-
-    await this.client.workflow.start(orderWorkflow, {
-      taskQueue: 'order-processing',
-      workflowId: `order-${orderId}`,
-      args: [{
-        orderId,
-        customerId: data.customerId,
-        items: data.items,
-        total: data.total,
-      }],
-    });
-
-    return orderId;
-  }
-
-  async getOrderStatus(orderId: string): Promise<string> {
-    const handle = this.client.workflow.getHandle(`order-${orderId}`);
-    return handle.query(getStatusQuery);
-  }
-}
-```
+- No `Math.random()`, `Date.now()`, `new Date()`, I/O, or Node APIs inside workflows
+- Use `sleep`, `condition`, `uuid4` from `@temporalio/workflow`
+- Put every side effect in an activity and always set `startToCloseTimeout`
+- Change running workflows with `patched()` or a new workflow type
+- Finish handlers with `await condition(allHandlersFinished)` before returning
 
 ## Testing Patterns
 
@@ -552,7 +263,7 @@ mockService.findById.mockResolvedValue({ id: '1', name: 'Test' });
 
 ### Controller Unit Test
 ```typescript
-// apps/auth/src/app/user/user.controller.spec.ts
+// apps/api/src/app/user/user.controller.spec.ts
 import { createMock } from '@golevelup/ts-jest';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { UserController } from './user.controller';
@@ -594,50 +305,6 @@ describe('UserController', () => {
 });
 ```
 
-### Service Unit Test
-```typescript
-import { createMock } from '@golevelup/ts-jest';
-import { Test, TestingModule } from '@nestjs/testing';
-import { NotFoundException } from '@nestjs/common';
-import { FeatureService } from './feature.service';
-import { FeatureRepositoryService } from '@projectx/db';
-
-describe('FeatureService', () => {
-  let service: FeatureService;
-  let repository: FeatureRepositoryService;
-
-  beforeEach(async () => {
-    const module: TestingModule = await Test.createTestingModule({
-      providers: [
-        FeatureService,
-        { provide: FeatureRepositoryService, useValue: createMock<FeatureRepositoryService>() },
-      ],
-    }).compile();
-
-    service = module.get<FeatureService>(FeatureService);
-    repository = module.get(FeatureRepositoryService);
-  });
-
-  describe('findOne', () => {
-    it('returns feature when found', async () => {
-      const mockFeature = { id: '123', name: 'Test Feature' };
-      jest.spyOn(repository, 'findById').mockResolvedValue(mockFeature);
-
-      const result = await service.findOne('123');
-
-      expect(result).toEqual(mockFeature);
-      expect(repository.findById).toHaveBeenCalledWith('123');
-    });
-
-    it('throws NotFoundException when feature not found', async () => {
-      jest.spyOn(repository, 'findById').mockResolvedValue(null);
-
-      await expect(service.findOne('123')).rejects.toThrow(NotFoundException);
-    });
-  });
-});
-```
-
 ### Mocking ExecutionContext (Guards/Interceptors)
 ```typescript
 import { createMock } from '@golevelup/ts-jest';
@@ -671,40 +338,15 @@ describe('JwtAuthGuard', () => {
 });
 ```
 
-### Mocking with Partial Implementations
-```typescript
-import { createMock } from '@golevelup/ts-jest';
-
-// Provide partial implementation, rest is auto-mocked
-const mockService = createMock<ComplexService>({
-  // Only override what you need
-  specificMethod: jest.fn().mockResolvedValue('custom value'),
-});
-
-// Other methods are still available as jest.fn()
-mockService.otherMethod.mockResolvedValue('mocked');
-```
-
-### Strict Mode (Fail on Unstubbed Calls)
-```typescript
-import { createMock } from '@golevelup/ts-jest';
-
-// Throws error if calling unstubbed method
-const strictMock = createMock<UserService>({}, { strict: true });
-
-// Must stub before calling
-strictMock.findAll.mockResolvedValue([]);
-await strictMock.findAll(); // Works
-
-await strictMock.findById('1'); // Throws error - not stubbed!
-```
+### Workflow Tests
+Use `@temporalio/testing`: `TestWorkflowEnvironment.createTimeSkipping()` plus a `Worker` built with `workflowsPath` and the activities taken from `ActivitiesService`, as in the test `pnpm gen:workflow` generates.
 
 ### Controller E2E Test
 ```typescript
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import * as request from 'supertest';
-import { AppModule } from '../src/app.module';
+import { AppModule } from '../src/app/app.module';
 
 describe('FeatureController (e2e)', () => {
   let app: INestApplication;
@@ -733,136 +375,29 @@ describe('FeatureController (e2e)', () => {
 ## Development Commands
 
 ```bash
-# Run services
-pnpm dev:auth           # Run auth service
-pnpm dev:order          # Run order service
-pnpm dev:product        # Run product service
-
-# Build
-pnpm build:auth         # Build auth service
-pnpm build:order        # Build order service
-pnpm build:product      # Build product service
-pnpm build:core         # Build core package
-
-# Testing
-pnpm test               # Run all tests
-pnpm --filter auth test # Run auth tests
-
-# Debugging (ports)
-# Auth: 9229, Order: 9230, Product: 9231
+pnpm dev:api                         # Run the API in watch mode
+pnpm build:api                       # Build the API and its dependencies
+pnpm --filter @projectx/api test     # Unit tests
+pnpm test:e2e                        # E2E tests (needs the database)
+pnpm test:generators                 # Generator check
+pnpm lint:fix                        # Biome
+pnpm typecheck
+# Debugging: attach to port 9229 (API_DEBUG_PORT)
 ```
 
 ## Email Templates with MJML
 
-The `@projectx/email` package uses MJML framework for responsive email templates.
-
-### Template Structure
-```
-packages/email/src/lib/
-├── common/
-│   ├── constants.ts      # Colors, fonts, spacing
-│   └── mjml.ts           # Base MJML wrapper
-├── auth/
-│   └── login.ts          # Login verification email
-├── order/
-│   ├── orderPending.ts
-│   ├── orderSuccess.ts
-│   └── orderFailed.ts
-├── template.ts           # EmailTemplates enum
-└── factory.ts            # Template factory mapping
-```
-
-### Creating a New Email Template
-
-#### Step 1: Create Template Function
-```typescript
-// packages/email/src/lib/feature/welcome.ts
-import { COLORS, FONT_SIZES, FONT_WEIGHTS } from "../common/constants";
-import { getEmailHtml } from "../common/mjml";
-
-export type WelcomeEmailData = {
-  userName: string;
-};
-
-export function getWelcomeEmailHtml<T extends WelcomeEmailData>(data: T): string {
-  const body = `
-    <mj-section>
-      <mj-column>
-        <mj-text font-size="${FONT_SIZES.xl}" font-weight="${FONT_WEIGHTS.bold}" align="center" color="${COLORS.text}">
-          Welcome to ProjectX!
-        </mj-text>
-        <mj-text font-size="${FONT_SIZES.base}" align="center" color="${COLORS.text}">
-          Hi ${data.userName}, we're excited to have you on board.
-        </mj-text>
-      </mj-column>
-    </mj-section>
-  `;
-  return getEmailHtml(body);
-}
-```
-
-#### Step 2: Register in EmailTemplates Enum
-```typescript
-// packages/email/src/lib/template.ts
-export enum EmailTemplates {
-  AuthLogin = "auth_login",
-  OrderPending = "order_pending",
-  OrderSuccess = "order_success",
-  OrderFailed = "order_failed",
-  Welcome = "welcome",  // Add new template
-}
-```
-
-#### Step 3: Add to Factory
-```typescript
-// packages/email/src/lib/factory.ts
-import { getWelcomeEmailHtml, type WelcomeEmailData } from "./feature/welcome";
-
-export type EmailTemplateDataMap = {
-  // ... existing mappings
-  [EmailTemplates.Welcome]: WelcomeEmailData;
-};
-
-export function createEmailTemplate<T extends EmailTemplates>(
-  templateKey: EmailTemplates,
-  data: EmailTemplateDataMap[T],
-) {
-  switch (templateKey) {
-    // ... existing cases
-    case EmailTemplates.Welcome:
-      return getWelcomeEmailHtml(data as WelcomeEmailData);
-    default:
-      return null;
-  }
-}
-```
-
-### Preview Templates in Browser
-
-The web app includes a route to preview email templates during development:
-
-```bash
-# Preview auth login template
-http://localhost:3000/email/auth_login
-
-# Preview order success template
-http://localhost:3000/email/order_success
-
-# Preview your new template
-http://localhost:3000/email/welcome
-```
-
-The route at `apps/web/src/routes/email.tsx` renders templates with mock data for visual verification.
+Templates live in `packages/email/src/lib/` (common layout + `auth/` login template). To add one: create the template function next to the others, register it in the `EmailTemplates` enum (`template.ts`), add it to the factory, and expose a send method on `EmailService`. In development, with an empty `SENDGRID_API_KEY`, `EmailService` uses a log transport.
 
 ## Best Practices
 
-1. **Keep controllers thin** - Delegate all business logic to services
-2. **Use repository pattern** - Access database through `@projectx/db` repositories
-3. **DTOs for everything** - Validate all input with class-validator
-4. **Document with Swagger** - Use ApiProperty/ApiOperation decorators
-5. **Handle errors properly** - Use NestJS built-in exceptions
-6. **Use `createMock` for testing** - Always use `@golevelup/ts-jest` for mocking services
+1. **Keep controllers thin** - Delegate business logic to services
+2. **Use repository pattern** - Access the database through `@projectx/db`
+3. **DTOs for everything** - Validate input with class-validator; shared DTOs go in `@projectx/models`
+4. **Document with Swagger** - ApiProperty/ApiOperation decorators
+5. **Protect routes** - `JwtAuthGuard` for authentication, `RolesGuard` + `@Roles` for authorization
+6. **Use `createMock` for testing** - `@golevelup/ts-jest` for service mocks
 7. **Workflows must be deterministic** - Move all I/O to activities
-8. **Configure activity timeouts** - Always set startToCloseTimeout
-9. **Use transactions** - Wrap related database operations
-10. **Log with Pino** - Use nestjs-pino for structured logging
+8. **Register activities through ActivitiesService** - A method not on its prototype is not an activity
+9. **Use `unknown`, never `any`**, and regular (not `type`) imports for injected classes
+10. **Log with Pino** - Use the configured logger

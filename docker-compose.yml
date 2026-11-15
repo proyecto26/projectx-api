@@ -2,14 +2,17 @@ x-project-name: &project-name ${COMPOSE_PROJECT_NAME:-projectx}
 
 # Define common service settings to reduce duplication
 x-service-common: &service-common
-  env_file: .env
+  env_file:
+    # cp .env.example .env
+    - path: .env
+      required: false
   networks:
     - default
   depends_on:
     db:
       condition: service_healthy
     temporal:
-      condition: service_started
+      condition: service_healthy
   environment:
     # Enable file system polling for better file watching in Docker
     - WATCHPACK_POLLING=true
@@ -20,9 +23,13 @@ x-service-common: &service-common
     - FORCE_COLOR=1
     # Turborepo cache dir inside the container
     - TURBO_CACHE_DIR=/app/.turbo
-    - VITE_DEV_SERVER=true
     - NODE_ENV=development
     - NODE_OPTIONS=--max-old-space-size=4096
+    # Inside the network the services are reached by name, whatever .env says for local runs
+    - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?schema=public&connect_timeout=300
+    - TEMPORAL_HOST=temporal:7233
+    # The API always listens on 8081 in its container; API_PORT only picks the host port
+    - API_PORT=8081
   build:
     context: .
     dockerfile: Dockerfile
@@ -32,22 +39,13 @@ x-service-common: &service-common
     # These are anonymous volumes to prevent node_modules from being overwritten by host
     - /app/node_modules
     # Apps node_modules
-    - /app/apps/auth/node_modules
-    - /app/apps/order/node_modules
-    - /app/apps/product/node_modules
-    - /app/apps/web/node_modules
+    - /app/apps/api/node_modules
     # Packages node_modules
+    - /app/packages/cli/node_modules
     - /app/packages/core/node_modules
     - /app/packages/db/node_modules
     - /app/packages/email/node_modules
     - /app/packages/models/node_modules
-    - /app/packages/payment/node_modules
-    - /app/packages/ui/node_modules
-    - /app/packages/workflow-client/node_modules
-    - /app/packages/workflows/node_modules
-    # Frontend files that should not be watched (speeds up the container)
-    - /app/apps/web/.vite
-    - /app/apps/web/dist
 
 services:
   db:
@@ -68,15 +66,14 @@ services:
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
+      # Over TCP: the init scripts run against a socket-only server, so the socket alone reports ready too early
+      test: [ "CMD-SHELL", "pg_isready -h 127.0.0.1 -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 2s # Added start period
     labels:
       - "com.*project-name.service=database"
-    expose:
-      - "${POSTGRES_PORT:-5432}"
     tmpfs:
       - /tmp
       - /run
@@ -121,7 +118,7 @@ services:
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PWD=${POSTGRES_PASSWORD}
       - DB_HOST=db
-      - DB_PORT=${POSTGRES_PORT:-5432}
+      - DB_PORT=5432
       - SQL_PASSWORD=${POSTGRES_PASSWORD}
       - ES_HOST=elasticsearch
       - ES_PORT=9200
@@ -144,7 +141,7 @@ services:
         condition: service_completed_successfully
     environment:
       - DB=postgres12
-      - DB_PORT=${POSTGRES_PORT:-5432}
+      - DB_PORT=5432
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PWD=${POSTGRES_PASSWORD}
       - POSTGRES_SEEDS=db
@@ -167,8 +164,6 @@ services:
       start_period: 10s
     labels:
       - "com.*project-name.service=temporal"
-    expose:
-      - "${TEMPORAL_PORT:-7233}"
 
   temporal-create-namespace:
     image: temporalio/admin-tools:1.32.1
@@ -178,8 +173,10 @@ services:
       temporal:
         condition: service_healthy
     environment:
-      - TEMPORAL_ADDRESS=temporal:${TEMPORAL_PORT:-7233}
-      - DEFAULT_NAMESPACE=${TEMPORAL_NAMESPACE:-default}
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-default}
+      - TEMPORAL_NAMESPACE_RETENTION=${TEMPORAL_NAMESPACE_RETENTION:-72h}
+      - TEMPORAL_SEARCH_ATTRIBUTES=${TEMPORAL_SEARCH_ATTRIBUTES:-}
     networks:
       - default
     volumes:
@@ -195,97 +192,58 @@ services:
       temporal:
         condition: service_healthy
     environment:
-      - TEMPORAL_ADDRESS=temporal:${TEMPORAL_PORT:-7233}
-      - TEMPORAL_CORS_ORIGINS=http://localhost:3000
+      - TEMPORAL_ADDRESS=temporal:7233
     networks:
       - default
     ports:
       - "${TEMPORAL_UI_PORT:-8080}:8080"
     labels:
       - "com.*project-name.service=temporal-ui"
-    expose:
-      - "${TEMPORAL_UI_PORT:-8080}"
-    # PROJECTX SERVICES
 
-  # Builder service - runs once to build all packages before app services start
+  # PROJECTX SERVICES
+
+  # Builder service - runs once to install, build the api's dependencies, migrate and seed
   builder:
     <<: *service-common
     container_name: ${COMPOSE_PROJECT_NAME:-projectx}-builder
+    depends_on:
+      db:
+        condition: service_healthy
     command:
       - /bin/sh
       - -c
       - |
         pnpm install --frozen-lockfile && \
-        pnpm turbo run build --filter=auth^... --filter=order^... --filter=product^... && \
+        pnpm --filter @projectx/db run prisma:generate && \
+        pnpm turbo run build --filter=@projectx/api^... && \
         pnpm --filter @projectx/db run prisma:migrate && \
         pnpm --filter @projectx/db run prisma:seed && \
         echo "Build complete!"
     # No ports needed - this is a one-time build service
 
-  auth:
+  api:
     <<: *service-common
-    container_name: auth
+    container_name: ${COMPOSE_PROJECT_NAME:-projectx}-api
     init: true
     depends_on:
+      db:
+        condition: service_healthy
       builder:
+        condition: service_completed_successfully
+      # The namespace and its search attributes must exist before the worker starts
+      temporal-create-namespace:
         condition: service_completed_successfully
     command:
       - /bin/sh
       - -c
       - |
-        cd /app/apps/auth && \
+        cd /app/apps/api && \
         exec pnpm start:debug
     ports:
-      - "${AUTH_PORT:-8081}:${AUTH_PORT:-8081}"
-      - "9229:9229"
-
-  order:
-    <<: *service-common
-    container_name: order
-    init: true
-    depends_on:
-      builder:
-        condition: service_completed_successfully
-    command:
-      - /bin/sh
-      - -c
-      - |
-        cd /app/apps/order && \
-        exec pnpm start:debug
-    ports:
-      - "${ORDER_PORT:-8082}:${ORDER_PORT:-8082}"
-      - "9230:9230"
-
-  product:
-    <<: *service-common
-    container_name: product
-    init: true
-    depends_on:
-      builder:
-        condition: service_completed_successfully
-    command:
-      - /bin/sh
-      - -c
-      - |
-        cd /app/apps/product && \
-        exec pnpm start:debug
-    ports:
-      - "${PRODUCT_PORT:-8083}:${PRODUCT_PORT:-8083}"
-      - "9231:9231"
-
-  # Public tunnel to the order service, opt in with `docker compose --profile ngrok up -d`
-  ngrok-order:
-    image: ngrok/ngrok:latest
-    platform: linux/amd64
-    profiles:
-      - ngrok
-    command:
-      - "http"
-      - "http://host.docker.internal:${ORDER_PORT:-8082}"
-    environment:
-      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN}
-    ports:
-      - 4040:4040
+      - "${API_PORT:-8081}:8081"
+      - "${API_DEBUG_PORT:-9229}:9229"
+    labels:
+      - "com.*project-name.service=api"
 
 networks:
   default:

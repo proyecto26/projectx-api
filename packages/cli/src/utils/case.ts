@@ -1,36 +1,26 @@
-/**
- * Convert string to PascalCase
- */
-export function pascalCase(str: string): string {
-  return str
-    .replace(/[-_\s]+(.)?/g, (_, c) => (c ? c.toUpperCase() : ""))
-    .replace(/^(.)/, (c) => c.toUpperCase());
+function words(text: string): string[] {
+  return text
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .split(/[^a-zA-Z0-9]+/)
+    .filter(Boolean);
 }
 
-/**
- * Convert string to camelCase
- */
-export function camelCase(str: string): string {
-  const pascal = pascalCase(str);
+/** Convert string to PascalCase */
+export function pascalCase(text: string): string {
+  return words(text)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join("");
+}
+
+/** Convert string to camelCase */
+export function camelCase(text: string): string {
+  const pascal = pascalCase(text);
   return pascal.charAt(0).toLowerCase() + pascal.slice(1);
 }
 
-/**
- * Convert string to UPPER_SNAKE_CASE
- */
-export function upperSnakeCase(str: string): string {
-  return str
-    .replace(/([a-z])([A-Z])/g, "$1_$2")
-    .replace(/[-\s]+/g, "_")
-    .toUpperCase();
-}
-
-/**
- * Convert string to kebab-case
- */
-export function kebabCase(str: string): string {
-  return str
-    .replace(/([a-z])([A-Z])/g, "$1-$2")
-    .replace(/[\s_]+/g, "-")
-    .toLowerCase();
+/** Convert string to kebab-case */
+export function kebabCase(text: string): string {
+  return words(text)
+    .map((w) => w.toLowerCase())
+    .join("-");
 }

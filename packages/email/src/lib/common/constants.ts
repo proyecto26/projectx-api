@@ -40,7 +40,7 @@ export const SPACING = {
 };
 
 export const IMAGES = {
-  LOGO: "https://via.placeholder.com/150x50.png?text=MarketPlace+Logo",
+  LOGO: "https://via.placeholder.com/150x50.png?text=ProjectX+Logo",
   HERO: "http://191n.mj.am/img/191n/1t/h0.jpg",
 };
 

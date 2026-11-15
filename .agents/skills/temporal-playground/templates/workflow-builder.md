@@ -10,9 +10,9 @@ Use this template when the playground is about designing Temporal workflows visu
 | + New WF   |  LiteGraph Canvas         |  Chat:   |
 |            |  (drag/drop nodes,        |  Messages|
 | Existing:  |   connect them)           |  Input   |
-| • createOrd|                           |  [Send]  |
-| • processPa|                           |  [Gen]   |
-| • loginUser|                           |          |
+| • loginUser|                           |  [Send]  |
+|            |                           |  [Gen]   |
+|            |                           |          |
 |            |                           |          |
 | Node Types |                           |          |
 | • Start    |                           |          |
@@ -20,7 +20,7 @@ Use this template when the playground is about designing Temporal workflows visu
 | • Signal.. |                           |          |
 |            |                           |          |
 | Templates: |                           |          |
-| • Payment  |                           |          |
+| • Approval |                           |          |
 | • Login... |                           |          |
 +------------+---------------------------+----------+
 | Spec Output:  [JSON + NL]  [Copy] [Send to Claude]|
@@ -35,17 +35,13 @@ Scan the monorepo for workflow files and display them with metadata:
 
 ```
 ┌─────────────────────────────────────┐
-│ createOrder              ORDER      │
-│ apps/order/src/workflows/order...   │
-│ ⚡2  🔍1  ✏️1  🔗1                  │
-├─────────────────────────────────────┤
-│ processPayment           ORDER      │
-│ apps/order/src/workflows/process... │
-│ ⚡2                                 │
-├─────────────────────────────────────┤
-│ loginUserWorkflow        AUTH       │
-│ apps/auth/src/workflows/login...    │
+│ loginUserWorkflow        API        │
+│ apps/api/src/workflows/login...     │
 │ 🔍1  ✏️1                            │
+├─────────────────────────────────────┤
+│ reportWorkflow           API        │
+│ apps/api/src/workflows/report...    │
+│ ⚡1  🔍1                            │
 └─────────────────────────────────────┘
 ```
 
@@ -74,11 +70,11 @@ Clicking an existing workflow loads it onto the canvas with all its real nodes, 
 
 ## Template presets
 
-5 templates based on real project patterns:
+5 templates based on common patterns:
 
-1. **Payment Processing** — Activity → Signal → Condition (from `process-payment.workflow.ts`)
-2. **Human-in-the-Loop Login** — Activity → Update → Condition (from `login.workflow.ts`)
-3. **Parent + Child** — Parent spawns child workflow (from `order.workflow.ts`)
+1. **Approval Request** — Activity → Child → Signal → Condition (approve/reject with a deadline)
+2. **Human-in-the-Loop Login** — Activity → Update → Condition (from `apps/api/src/workflows/login.workflow.ts`)
+3. **Parent + Child** — Parent spawns child workflow
 4. **Signal-Driven State Machine** — Multiple signal handlers managing state transitions
 5. **Long-Running + ContinueAsNew** — Loop with Sleep and periodic checkpointing
 
@@ -87,21 +83,21 @@ Clicking an existing workflow loads it onto the canvas with all its real nodes, 
 ### Create mode (new workflow)
 ```
 Create a new Temporal workflow called "myWorkflow" for ProjectX.
-Task Queue: "order"
+Task Queue: "api"
 ...
 Implementation Notes:
-  - Use `pnpm cli generate workflow` to scaffold, then customize
+  - Use `pnpm gen:workflow` to scaffold (workflow, feature activity, ActivitiesService delegate, test), then customize
   - Add signal/query/update definitions to @projectx/core
 ```
 
 ### Modify mode (existing workflow)
 ```
-Modify the existing Temporal workflow "createOrder" in ProjectX.
-Source file: apps/order/src/workflows/order.workflow.ts
-Utils/definitions: packages/core/src/lib/order/workflow.utils.ts
+Modify the existing Temporal workflow "loginUserWorkflow" in ProjectX.
+Source file: apps/api/src/workflows/login.workflow.ts
+Utils/definitions: packages/core/src/lib/user/workflow.utils.ts
 ...
 Implementation Notes:
-  - Modify the existing file: apps/order/src/workflows/order.workflow.ts
+  - Modify the existing file: apps/api/src/workflows/login.workflow.ts
   - Preserve existing behavior unless explicitly changed
 ```
 

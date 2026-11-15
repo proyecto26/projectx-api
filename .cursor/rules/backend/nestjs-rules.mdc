@@ -1,16 +1,14 @@
 ---
-description: Rules for NestJS backend services (auth, order, product)
+description: Rules for the NestJS API app (apps/api)
 globs: 
-  - apps/auth/**/*
-  - apps/order/**/*
-  - apps/product/**/*
+  - apps/api/**/*
 alwaysApply: true
 ---
-# NestJS Backend Services Rules
+# NestJS API Rules
 ## Project Structure
 - This is a monorepo using pnpm and Turborepo
 - NestJS apps are compiled with **CommonJS** (required for NestJS)
-- Apps: `auth`, `order`, `product`
+- One app: `apps/api` (package `@projectx/api`) with auth, users, RBAC, health, swagger and an in-process Temporal worker + client
 - All apps use NestJS 12.x with TypeScript 5.9.x
 ## Critical: TypeScript Imports for Dependency Injection
 ### ❌ NEVER use `type` imports for services
@@ -67,24 +65,12 @@ getWorkflowClient() {
   return workflowClient;
 }
 ```
-## Service-Specific Notes
-### Auth Service (Port 8081)
-- Handles user authentication via magic link emails
-- Uses Temporal workflow for login process
-- Workflow ID pattern: `login-${email}`
-- Search attributes: `Email`
-- Dependencies: `ConfigService`, `ClientService`, `AuthService`
-### Order Service (Port 8082)
-- Handles order creation and payment processing
-- Integrates with Stripe for payments
-- Workflow ID pattern: `order-${referenceId}`
-- Search attributes: `UserId`, `Email`, `OrderId`
-- Dependencies: `ConfigService`, `ClientService`, `StripeService`
-- Webhook endpoint: `/order/webhook` (raw body required)
-### Product Service (Port 8083)
-- Handles product catalog
-- No Temporal workflows (simpler service)
-- Dependencies: Standard NestJS services only
+## App Notes (Port 8081)
+- Login: `POST /login` starts the login workflow, which emails a one-time code; `POST /verify-code` validates it through a workflow update and returns a JWT
+- Workflow ID pattern: `login-${email}`; search attribute: `Email`
+- Authorization: `JwtAuthGuard` + `RolesGuard` with `@Roles(...)` from `@projectx/core`; roles are read from the database per request, not from the JWT
+- Activities: one `ActivitiesService` registry (`apps/api/src/activities/activities.service.ts`) delegating to feature `<feature>.activities.ts` classes; use `pnpm gen:workflow` to add a workflow and its activity
+- New modules: `pnpm gen:module` creates the module in `apps/api` and registers it in `AppModule`
 ## Database Integration
 ### Prisma is used for all database operations
 - Schema location: `packages/db/prisma/schema.prisma`
@@ -108,23 +94,19 @@ getWorkflowClient() {
 - `TEMPORAL_HOST` - Temporal server address (format: `temporal:7233`)
 - `TEMPORAL_PORT` - Temporal server port (default: 7233)
 - `TEMPORAL_NAMESPACE` - Temporal namespace (default: `default`)
-### Service-specific:
-- `AUTH_PORT` - Auth service port (default: 8081)
-- `ORDER_PORT` - Order service port (default: 8082)
-- `PRODUCT_PORT` - Product service port (default: 8083)
+### App-specific:
+- `API_PORT` - API port (default: 8081)
 - `JWT_SECRET` - Secret for JWT tokens
-- `SESSION_SECRET` - Secret for sessions
-- `SENDGRID_API_KEY` - Email service API key
-- `STRIPE_SECRET_KEY` - Stripe secret key (order service)
-- `STRIPE_WEBHOOK_SECRET` - Stripe webhook secret (order service)
+- `ADMIN_EMAILS` - Comma-separated emails promoted to `admin` by the seed
+- `SENDGRID_API_KEY` - Email API key (empty in development: the OTP is printed to the log)
 ## Build Process
 ### Development mode (in Docker):
 ```bash
 pnpm install --frozen-lockfile
-pnpm turbo run build --filter=<service>^...  # Build dependencies
+pnpm turbo run build --filter=@projectx/api^...  # Build dependencies
 pnpm --filter @projectx/db run prisma:generate
 pnpm --filter @projectx/db run prisma:migrate
-cd /app/apps/<service>
+cd /app/apps/api
 pnpm start:dev  # Watch mode with hot reload
 ```
 ### The build order matters:
@@ -200,9 +182,7 @@ try {
 - `node_modules` as anonymous volumes (prevent overwrite)
 - Each app and package has its own `node_modules` volume
 ### Debug ports
-- Auth: 9229
-- Order: 9230
-- Product: 9231
+- API: 9229 (`API_DEBUG_PORT`)
 ## Common Issues and Solutions
 ### Issue: "Cannot resolve dependencies"
 **Cause:** Using `type` imports for injectable services

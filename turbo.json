@@ -6,8 +6,8 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "inputs": ["$TURBO_DEFAULT$", ".env*", "!**/*.stories.{tsx,jsx,mdx}"],
-      "outputs": ["dist/**", "storybook-static/**"]
+      "inputs": ["$TURBO_DEFAULT$", ".env*"],
+      "outputs": ["dist/**"]
     },
     "lint": {
       "dependsOn": ["^lint"]
@@ -18,7 +18,21 @@
     "test": {
       "dependsOn": ["^build"]
     },
+    "test:e2e": {
+      "dependsOn": ["^build"],
+      "cache": false,
+      "passThroughEnv": [
+        "NODE_ENV",
+        "JWT_SECRET",
+        "ADMIN_EMAILS",
+        "API_PORT",
+        "TEMPORAL_*",
+        "SENDGRID_API_KEY",
+        "EMAIL_*"
+      ]
+    },
     "dev": {
+      "dependsOn": ["^build"],
       "cache": false,
       "persistent": true
     }

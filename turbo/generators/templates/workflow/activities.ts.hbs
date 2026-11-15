@@ -1,0 +1,18 @@
+import { Injectable, Logger } from "@nestjs/common";
+
+import type { {{inputType}}, {{resultType}} } from "{{workflowImportFromFeature}}";
+
+/**
+ * Activities of this feature. ActivitiesService (the registry the Temporal
+ * worker reads) injects this class and delegates to its methods.
+ */
+@Injectable()
+export class {{featureClass}} {
+  private readonly logger = new Logger({{featureClass}}.name);
+
+  async {{activity}}(input: {{inputType}}): Promise<{{resultType}}> {
+    this.logger.log(`{{activity}}(${input.id})`);
+    // TODO: do the real work here (database, email, HTTP call...)
+    return { id: input.id, processedAt: new Date().toISOString() };
+  }
+}

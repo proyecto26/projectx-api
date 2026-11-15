@@ -1,109 +1,336 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { PlopTypes } from "@turbo/gen";
 
-// Helper to find next available port
-function getNextAvailablePort(basePath: string): number {
-  const appsDir = path.join(basePath, "apps");
-  const existingPorts = [8081, 8082, 8083]; // auth, order, product defaults
+/**
+ * Generators for the single NestJS + Temporal app in apps/api.
+ *
+ * - `module`:   a NestJS feature module (module, controller, service, spec) registered in AppModule.
+ * - `workflow`: a Temporal workflow plus its activity, wired through the activity registry:
+ *     1. `src/workflows/<name>.workflow.ts` and its export in `src/workflows/index.ts`
+ *     2. a method on `<feature>.activities.ts`, an injectable class provided and exported
+ *        by `<feature>.module.ts` (both created when the feature doesn't exist yet)
+ *     3. the feature module imported by `ActivitiesModule`
+ *     4. constructor injection and one delegating method on `ActivitiesService`, the only
+ *        object the Temporal worker registers activities from (methods on its prototype)
+ *     5. `src/workflows/<name>.workflow.spec.ts`, which runs the workflow with
+ *        `TestWorkflowEnvironment` against the real `ActivitiesModule`
+ *
+ * Both run non-interactively with `turbo gen <generator> --args ...` (prompt order).
+ */
 
-  if (fs.existsSync(appsDir)) {
-    const apps = fs.readdirSync(appsDir, { withFileTypes: true });
-    for (const app of apps) {
-      if (app.isDirectory()) {
-        const envConfigPath = path.join(
-          appsDir,
-          app.name,
-          "src/config/env.config.ts",
-        );
-        if (fs.existsSync(envConfigPath)) {
-          const content = fs.readFileSync(envConfigPath, "utf-8");
-          const portMatch = content.match(/(\w+)_PORT/);
-          if (portMatch) {
-            // Try to find the default port in app.config.ts
-            const appConfigPath = path.join(
-              appsDir,
-              app.name,
-              "src/config/app.config.ts",
-            );
-            if (fs.existsSync(appConfigPath)) {
-              const appContent = fs.readFileSync(appConfigPath, "utf-8");
-              const defaultPort = appContent.match(/\|\|\s*(\d+)/);
-              if (defaultPort?.[1]) {
-                existingPorts.push(Number.parseInt(defaultPort[1], 10));
-              }
-            }
-          }
-        }
+const APP_DIR = "apps/api";
+
+interface ApiLayout {
+  /** apps/api/src */
+  srcDir: string;
+  /** Directory holding feature modules: the one with app.module.ts (apps/api/src, or apps/api/src/app) */
+  featuresDir: string;
+  appModuleFile: string;
+  activitiesDir: string;
+  workflowsDir: string;
+  /** activities/discover-activities.ts, the worker's activity discovery, when present */
+  discoverFile?: string;
+}
+
+function firstExisting(root: string, candidates: string[]): string | undefined {
+  return candidates.find((candidate) =>
+    fs.existsSync(path.join(root, candidate)),
+  );
+}
+
+/**
+ * Feature modules live next to app.module.ts (src/<feature>/ today, src/app/ also
+ * works); the activity registry lives in src/activities/ (src/app/activities/ also works).
+ */
+function resolveLayout(root: string): ApiLayout {
+  const srcDir = `${APP_DIR}/src`;
+  const activitiesService = firstExisting(root, [
+    `${srcDir}/activities/activities.service.ts`,
+    `${srcDir}/app/activities/activities.service.ts`,
+  ]);
+  if (!activitiesService) {
+    throw new Error(
+      `Could not find ActivitiesService in ${srcDir}/activities or ${srcDir}/app/activities`,
+    );
+  }
+  const activitiesDir = path.posix.dirname(activitiesService);
+  const appModuleFile =
+    firstExisting(root, [
+      `${srcDir}/app.module.ts`,
+      `${srcDir}/app/app.module.ts`,
+    ]) ?? `${srcDir}/app.module.ts`;
+  return {
+    srcDir,
+    featuresDir: path.posix.dirname(appModuleFile),
+    appModuleFile,
+    activitiesDir,
+    workflowsDir: `${srcDir}/workflows`,
+    discoverFile: firstExisting(root, [
+      `${activitiesDir}/discover-activities.ts`,
+    ]),
+  };
+}
+
+/** Relative import specifier from one file to another (both repo-relative, no extension). */
+function importPath(fromFile: string, toFileNoExt: string): string {
+  const rel = path.posix.relative(path.posix.dirname(fromFile), toFileNoExt);
+  return rel.startsWith(".") ? rel : `./${rel}`;
+}
+
+// ── Case helpers (same output as plop's built-in helpers) ─────────────
+
+function words(text: string): string[] {
+  return text
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .split(/[^a-zA-Z0-9]+/)
+    .filter(Boolean);
+}
+
+function pascalCase(text: string): string {
+  return words(text)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join("");
+}
+
+function camelCase(text: string): string {
+  const pascal = pascalCase(text);
+  return pascal.charAt(0).toLowerCase() + pascal.slice(1);
+}
+
+function kebabCase(text: string): string {
+  return words(text)
+    .map((w) => w.toLowerCase())
+    .join("-");
+}
+
+// ── Source editing helpers ────────────────────────────────────────────
+
+/** Insert `line` after the last import statement (or at the top). */
+function addImport(content: string, line: string): string {
+  if (content.includes(line)) return content;
+  const importEnd =
+    /^(?:import[^;]*?from\s+["'][^"']+["'];|import\s+["'][^"']+["'];)[ \t]*$/gm;
+  let lastIndex = -1;
+  for (const match of content.matchAll(importEnd)) {
+    lastIndex = (match.index ?? 0) + match[0].length;
+  }
+  if (lastIndex === -1) return `${line}\n${content}`;
+  return `${content.slice(0, lastIndex)}\n${line}${content.slice(lastIndex)}`;
+}
+
+/** Make sure `name` is imported from `source` with a named import. */
+function ensureNamedImport(
+  content: string,
+  name: string,
+  source: string,
+): string {
+  const escaped = source.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+  const existing = new RegExp(
+    `import\\s*\\{([^}]*)\\}\\s*from\\s*["']${escaped}["'];?`,
+  );
+  const match = content.match(existing);
+  if (match) {
+    const names = (match[1] ?? "")
+      .split(",")
+      .map((n) => n.trim())
+      .filter(Boolean);
+    if (names.includes(name)) return content;
+    return content.replace(
+      existing,
+      `import { ${[...names, name].join(", ")} } from "${source}";`,
+    );
+  }
+  return addImport(content, `import { ${name} } from "${source}";`);
+}
+
+/** Index of the bracket closing the one opened at `openIndex` (skips strings and comments). */
+function findClosing(content: string, openIndex: number): number {
+  const pairs: Record<string, string> = { "(": ")", "[": "]", "{": "}" };
+  const stack: string[] = [];
+  for (let i = openIndex; i < content.length; i++) {
+    const char = content[i] as string;
+    if (char === '"' || char === "'" || char === "`") {
+      i++;
+      while (i < content.length && content[i] !== char) {
+        if (content[i] === "\\") i++;
+        i++;
+      }
+      continue;
+    }
+    if (char === "/" && content[i + 1] === "/") {
+      while (i < content.length && content[i] !== "\n") i++;
+      continue;
+    }
+    if (char === "/" && content[i + 1] === "*") {
+      i = content.indexOf("*/", i + 2) + 1;
+      continue;
+    }
+    if (pairs[char]) {
+      stack.push(pairs[char] as string);
+    } else if (char === stack[stack.length - 1]) {
+      stack.pop();
+      if (stack.length === 0) return i;
+    }
+  }
+  throw new Error("Unbalanced brackets");
+}
+
+/**
+ * Append `item` to the array property `prop` of the `@Module({...})` metadata,
+ * creating the property when missing. Only top-level keys of the metadata object
+ * are matched, so nested `imports` (e.g. inside registerAsync) are left alone.
+ */
+function addToModuleArray(content: string, prop: string, item: string): string {
+  const moduleStart = content.indexOf("@Module(");
+  if (moduleStart === -1) throw new Error("No @Module() decorator found");
+  const objectStart = content.indexOf("{", moduleStart);
+  const objectEnd = findClosing(content, objectStart);
+
+  // Walk the top level of the metadata object (nested brackets are skipped whole)
+  for (let i = objectStart + 1; i < objectEnd; i++) {
+    const char = content[i] as string;
+    if ("([{".includes(char)) {
+      i = findClosing(content, i);
+      continue;
+    }
+    if (content.startsWith(prop, i)) {
+      const before = content[i - 1] ?? "";
+      const after = content.slice(i + prop.length).match(/^\s*:\s*\[/);
+      if (/[\s{,]/.test(before) && after) {
+        const open = i + prop.length + after[0].length - 1;
+        const close = findClosing(content, open);
+        const inner = content.slice(open + 1, close);
+        const names = inner.split(/[\s,]+/);
+        if (names.includes(item)) return content;
+        const trimmed = inner.replace(/[\s,]*$/, "");
+        const next = trimmed.trim() ? `${trimmed}, ${item}` : item;
+        return `${content.slice(0, open + 1)}${next}${content.slice(close)}`;
       }
     }
   }
-
-  const maxPort = Math.max(...existingPorts);
-  return maxPort + 1;
+  return `${content.slice(0, objectStart + 1)}\n  ${prop}: [${item}],${content.slice(objectStart + 1)}`;
 }
 
-// Helper to get next debug port
-function getNextDebugPort(basePath: string): number {
-  const baseDebugPort = 9229; // auth uses 9229, order 9230, product 9231
-  const appsDir = path.join(basePath, "apps");
-  let maxDebugPort = baseDebugPort - 1;
-
-  if (fs.existsSync(appsDir)) {
-    const apps = fs.readdirSync(appsDir, { withFileTypes: true });
-    maxDebugPort =
-      baseDebugPort + apps.filter((a) => a.isDirectory()).length - 1;
+/** Insert `member` before the closing brace of `export class <className>`. */
+function addClassMember(
+  content: string,
+  className: string,
+  member: string,
+): string {
+  const classMatch = content.match(
+    new RegExp(`export\\s+class\\s+${className}\\b[^{]*\\{`),
+  );
+  if (!classMatch || classMatch.index === undefined) {
+    throw new Error(`Class ${className} not found`);
   }
-
-  return maxDebugPort + 1;
+  const open = classMatch.index + classMatch[0].length - 1;
+  const close = findClosing(content, open);
+  const body = content.slice(open + 1, close).replace(/\s*$/, "");
+  return `${content.slice(0, open + 1)}${body}\n\n${member}\n${content.slice(close)}`;
 }
+
+/** Add a constructor parameter (creating the constructor when the class has none). */
+function addConstructorParam(
+  content: string,
+  className: string,
+  param: string,
+  propName: string,
+): string {
+  const classMatch = content.match(
+    new RegExp(`export\\s+class\\s+${className}\\b[^{]*\\{`),
+  );
+  if (!classMatch || classMatch.index === undefined) {
+    throw new Error(`Class ${className} not found`);
+  }
+  const open = classMatch.index + classMatch[0].length - 1;
+  const close = findClosing(content, open);
+  const body = content.slice(open, close);
+  const ctorOffset = body.search(/\bconstructor\s*\(/);
+  if (ctorOffset === -1) {
+    const insertAt = open + 1;
+    return `${content.slice(0, insertAt)}\n  constructor(${param}) {}\n${content.slice(insertAt)}`;
+  }
+  const parenOpen = content.indexOf("(", open + ctorOffset);
+  const parenClose = findClosing(content, parenOpen);
+  const params = content.slice(parenOpen + 1, parenClose);
+  if (new RegExp(`\\b${propName}\\b`).test(params)) return content;
+  const trimmed = params.replace(/[\s,]*$/, "");
+  const next = trimmed.trim() ? `${trimmed},\n    ${param},\n  ` : param;
+  return `${content.slice(0, parenOpen + 1)}${next}${content.slice(parenClose)}`;
+}
+
+/** A `*.module.ts` in `dir` that lists `className` (as a provider), if any. */
+function findModuleProviding(
+  root: string,
+  dir: string,
+  className: string,
+): string | undefined {
+  const absolute = path.join(root, dir);
+  if (!fs.existsSync(absolute)) return undefined;
+  return fs
+    .readdirSync(absolute)
+    .filter((file) => file.endsWith(".module.ts"))
+    .map((file) => `${dir}/${file}`)
+    .find((file) =>
+      new RegExp(`providers:\\s*\\[[^\\]]*\\b${className}\\b`).test(
+        readFile(root, file),
+      ),
+    );
+}
+
+function moduleClassName(root: string, file: string): string | undefined {
+  if (!fs.existsSync(path.join(root, file))) return undefined;
+  return readFile(root, file).match(/export\s+class\s+(\w+)/)?.[1];
+}
+
+function readFile(root: string, file: string): string {
+  return fs.readFileSync(path.join(root, file), "utf-8");
+}
+
+/** Format the touched files with the repo's Biome config (best effort). */
+function formatFiles(root: string, files: string[]): string {
+  const biome = path.join(root, "node_modules", ".bin", "biome");
+  const existing = files.filter((file) => fs.existsSync(path.join(root, file)));
+  if (!fs.existsSync(biome) || existing.length === 0) {
+    return "Skipped formatting (Biome not installed)";
+  }
+  try {
+    execFileSync(biome, ["check", "--write", ...existing], {
+      cwd: root,
+      stdio: "pipe",
+    });
+    return `Formatted ${existing.length} files with Biome`;
+  } catch {
+    return "Biome reported issues; run `pnpm lint:fix` and review the generated files";
+  }
+}
+
+// ── Generators ────────────────────────────────────────────────────────
 
 export default function generator(plop: PlopTypes.NodePlopAPI): void {
-  // Get the root path
   const rootPath = plop.getDestBasePath();
 
-  // Custom helpers
-  plop.setHelper("upperSnakeCase", (text: string) => {
-    return text
-      .replace(/([a-z])([A-Z])/g, "$1_$2")
-      .replace(/[-\s]+/g, "_")
-      .toUpperCase();
-  });
-
   // ============================================
-  // PHASE 1: Basic NestJS Service Generator
+  // NestJS feature module in apps/api
   // ============================================
-  plop.setGenerator("nestjs-service", {
+  plop.setGenerator("module", {
     description:
-      "Create a new NestJS microservice (without Temporal workflows)",
+      "Add a NestJS feature module (controller, service, spec) to apps/api and register it in AppModule",
     prompts: [
       {
         type: "input",
-        name: "serviceName",
-        message: "What is the name of the service?",
+        name: "name",
+        message:
+          "Module name (kebab-case, e.g. 'projects', 'billing-account'):",
         validate: (input: string) => {
-          if (!input || input.trim() === "") {
-            return "Service name is required";
+          if (!/^[a-z][a-z0-9-]*$/.test(input ?? "")) {
+            return "Use lowercase letters, numbers and hyphens, starting with a letter";
           }
-          if (!/^[a-z][a-z0-9-]*$/.test(input)) {
-            return "Service name must be lowercase, start with a letter, and contain only letters, numbers, and hyphens";
-          }
-          const serviceDir = path.join(rootPath, "apps", input);
-          if (fs.existsSync(serviceDir)) {
-            return `Service "${input}" already exists`;
-          }
-          return true;
-        },
-      },
-      {
-        type: "input",
-        name: "port",
-        message: "What port should the service run on?",
-        default: () => getNextAvailablePort(rootPath).toString(),
-        validate: (input: string) => {
-          const port = Number.parseInt(input, 10);
-          if (Number.isNaN(port) || port < 1 || port > 65535) {
-            return "Port must be a valid number between 1 and 65535";
+          const layout = resolveLayout(rootPath);
+          if (fs.existsSync(path.join(rootPath, layout.featuresDir, input))) {
+            return `${layout.featuresDir}/${input} already exists`;
           }
           return true;
         },
@@ -111,647 +338,335 @@ export default function generator(plop: PlopTypes.NodePlopAPI): void {
       {
         type: "input",
         name: "description",
-        message: "Brief description of the service:",
-        default: (answers: { serviceName: string }) =>
-          `${answers.serviceName.charAt(0).toUpperCase() + answers.serviceName.slice(1)} microservice`,
-      },
-      {
-        type: "confirm",
-        name: "includeEmail",
-        message: "Include Email module (@projectx/email)?",
-        default: false,
-      },
-      {
-        type: "confirm",
-        name: "includePayment",
-        message: "Include Payment module (@projectx/payment)?",
-        default: false,
+        message: "Short description (used in Swagger):",
+        default: (answers: { name: string }) =>
+          `${pascalCase(answers.name)} endpoints`,
       },
     ],
     actions: (answers) => {
       if (!answers) return [];
-
-      const debugPort = getNextDebugPort(rootPath);
-      const data = {
-        ...answers,
-        debugPort,
-      };
-
-      const actions: PlopTypes.ActionType[] = [
-        // Package files
-        {
-          type: "add",
-          path: "apps/{{serviceName}}/package.json",
-          templateFile: "templates/nestjs-service/package.json.hbs",
-          data,
-        },
-        {
-          type: "add",
-          path: "apps/{{serviceName}}/tsconfig.json",
-          templateFile: "templates/nestjs-service/tsconfig.json.hbs",
-          data,
-        },
-        {
-          type: "add",
-          path: "apps/{{serviceName}}/nest-cli.json",
-          templateFile: "templates/nestjs-service/nest-cli.json.hbs",
-          data,
-        },
-        // Source files
-        {
-          type: "add",
-          path: "apps/{{serviceName}}/src/main.ts",
-          templateFile: "templates/nestjs-service/src/main.ts.hbs",
-          data,
-        },
-        // App files
-        {
-          type: "add",
-          path: "apps/{{serviceName}}/src/app/app.module.ts",
-          templateFile: "templates/nestjs-service/src/app/app.module.ts.hbs",
-          data,
-        },
-        {
-          type: "add",
-          path: "apps/{{serviceName}}/src/app/app.controller.ts",
-          templateFile:
-            "templates/nestjs-service/src/app/app.controller.ts.hbs",
-          data,
-        },
-        {
-          type: "add",
-          path: "apps/{{serviceName}}/src/app/app.service.ts",
-          templateFile: "templates/nestjs-service/src/app/app.service.ts.hbs",
-          data,
-        },
-        {
-          type: "add",
-          path: "apps/{{serviceName}}/src/app/app.controller.spec.ts",
-          templateFile:
-            "templates/nestjs-service/src/app/app.controller.spec.ts.hbs",
-          data,
-        },
-        // Config files
-        {
-          type: "add",
-          path: "apps/{{serviceName}}/src/config/app.config.ts",
-          templateFile: "templates/nestjs-service/src/config/app.config.ts.hbs",
-          data,
-        },
-        {
-          type: "add",
-          path: "apps/{{serviceName}}/src/config/env.config.ts",
-          templateFile: "templates/nestjs-service/src/config/env.config.ts.hbs",
-          data,
-        },
-        {
-          type: "add",
-          path: "apps/{{serviceName}}/src/config/swagger.config.ts",
-          templateFile:
-            "templates/nestjs-service/src/config/swagger.config.ts.hbs",
-          data,
-        },
-        // Test files
-        {
-          type: "add",
-          path: "apps/{{serviceName}}/test/jest-e2e.json",
-          templateFile: "templates/nestjs-service/test/jest-e2e.json.hbs",
-          data,
-        },
-        {
-          type: "add",
-          path: "apps/{{serviceName}}/test/app.e2e-spec.ts",
-          templateFile: "templates/nestjs-service/test/app.e2e-spec.ts.hbs",
-          data,
-        },
+      const layout = resolveLayout(rootPath);
+      const name = kebabCase(answers.name as string);
+      const dir = `${layout.featuresDir}/${name}`;
+      const moduleClass = `${pascalCase(name)}Module`;
+      const moduleFile = `${dir}/${name}.module.ts`;
+      const data = { ...answers, name };
+      const files = [
+        moduleFile,
+        `${dir}/${name}.controller.ts`,
+        `${dir}/${name}.service.ts`,
+        `${dir}/${name}.controller.spec.ts`,
+        layout.appModuleFile,
       ];
 
-      // Phase 3: Add automation actions
-      actions.push(
-        // Update root package.json
+      return [
+        {
+          type: "add",
+          path: moduleFile,
+          templateFile: "templates/module/module.ts.hbs",
+          data,
+        },
+        {
+          type: "add",
+          path: `${dir}/${name}.controller.ts`,
+          templateFile: "templates/module/controller.ts.hbs",
+          data,
+        },
+        {
+          type: "add",
+          path: `${dir}/${name}.service.ts`,
+          templateFile: "templates/module/service.ts.hbs",
+          data,
+        },
+        {
+          type: "add",
+          path: `${dir}/${name}.controller.spec.ts`,
+          templateFile: "templates/module/controller.spec.ts.hbs",
+          data,
+        },
         {
           type: "modify",
-          path: "package.json",
-          transform: (content: string, ans: Record<string, unknown>) => {
-            const pkg = JSON.parse(content);
-            const svcName = ans.serviceName as string;
-
-            // Add dev script
-            pkg.scripts[`dev:${svcName}`] = `turbo run dev --filter=${svcName}`;
-            // Add build script
-            pkg.scripts[`build:${svcName}`] =
-              `turbo run build --filter=${svcName}`;
-
-            // Sort scripts alphabetically for consistency
-            const sortedScripts: Record<string, string> = {};
-            for (const key of Object.keys(pkg.scripts).sort()) {
-              sortedScripts[key] = pkg.scripts[key];
-            }
-            pkg.scripts = sortedScripts;
-
-            return JSON.stringify(pkg, null, 2);
+          path: layout.appModuleFile,
+          transform: (content: string) => {
+            const withImport = addImport(
+              content,
+              `import { ${moduleClass} } from "${importPath(layout.appModuleFile, moduleFile.replace(/\.ts$/, ""))}";`,
+            );
+            return addToModuleArray(withImport, "imports", moduleClass);
           },
-        } as PlopTypes.ActionType,
-        // Update docker-compose.yml
-        {
-          type: "modify",
-          path: "docker-compose.yml",
-          transform: (content: string, ans: Record<string, unknown>) => {
-            const svcName = ans.serviceName as string;
-            const svcPort = ans.port as string;
-            const upperName = svcName.toUpperCase().replace(/-/g, "_");
-
-            // Find the position to insert (before ngrok-order or at end of services)
-            const insertMarker = "  ngrok-order:";
-            const serviceBlock = `
-  ${svcName}:
-    <<: *service-common
-    container_name: ${svcName}
-    init: true
-    depends_on:
-      builder:
-        condition: service_completed_successfully
-    command:
-      - /bin/sh
-      - -c
-      - |
-        cd /app/apps/${svcName} && \\
-        exec pnpm start:debug
-    ports:
-      - "\${${upperName}_PORT:-${svcPort}}:\${${upperName}_PORT:-${svcPort}}"
-      - "${debugPort}:${debugPort}"
-
-`;
-            if (content.includes(insertMarker)) {
-              return content.replace(insertMarker, serviceBlock + insertMarker);
-            }
-            // Fallback: append before networks section
-            return content.replace(/\nnetworks:/, `${serviceBlock}\nnetworks:`);
-          },
-        } as PlopTypes.ActionType,
-        // Update x-service-common volumes to include new service node_modules
-        {
-          type: "modify",
-          path: "docker-compose.yml",
-          transform: (content: string, ans: Record<string, unknown>) => {
-            const svcName = ans.serviceName as string;
-            const nodeModulesLine = `    - /app/apps/${svcName}/node_modules`;
-
-            // Find the Apps node_modules section and add after the last app
-            const appsNodeModulesPattern =
-              /( {4}- \/app\/apps\/\w+\/node_modules\n)( {4}# Packages node_modules)/;
-            if (appsNodeModulesPattern.test(content)) {
-              return content.replace(
-                appsNodeModulesPattern,
-                `$1${nodeModulesLine}\n$2`,
-              );
-            }
-            return content;
-          },
-        } as PlopTypes.ActionType,
-        // Update builder command to include new service
-        {
-          type: "modify",
-          path: "docker-compose.yml",
-          transform: (content: string, ans: Record<string, unknown>) => {
-            const svcName = ans.serviceName as string;
-
-            // Add filter for new service in builder turbo command
-            const builderPattern =
-              /(pnpm turbo run build --filter=auth\^\.\.\. --filter=order\^\.\.\. --filter=product\^\.\.\.)( &&)/;
-            if (builderPattern.test(content)) {
-              return content.replace(
-                builderPattern,
-                `$1 --filter=${svcName}^...$2`,
-              );
-            }
-            return content;
-          },
-        } as PlopTypes.ActionType,
-      );
-
-      // Final message
-      actions.push({
-        type: "add",
-        path: "apps/{{serviceName}}/.generated",
-        template: `Service generated successfully!
-
-Next steps:
-1. Add {{upperSnakeCase serviceName}}_PORT={{port}} to your .env file
-2. Run: pnpm install
-3. Run: pnpm dev:{{serviceName}}
-
-Your service will be available at: http://localhost:{{port}}/{{serviceName}}
-Swagger docs: http://localhost:{{port}}/{{serviceName}}/docs
-`,
-        data,
-      });
-
-      return actions;
+        },
+        () => formatFiles(rootPath, files),
+      ];
     },
   });
 
   // ============================================
-  // PHASE 2: Temporal-enabled NestJS Service Generator
-  // ============================================
-  plop.setGenerator("nestjs-temporal-service", {
-    description:
-      "Create a new NestJS microservice with Temporal workflow support",
-    prompts: [
-      {
-        type: "input",
-        name: "serviceName",
-        message: "What is the name of the service?",
-        validate: (input: string) => {
-          if (!input || input.trim() === "") {
-            return "Service name is required";
-          }
-          if (!/^[a-z][a-z0-9-]*$/.test(input)) {
-            return "Service name must be lowercase, start with a letter, and contain only letters, numbers, and hyphens";
-          }
-          const serviceDir = path.join(rootPath, "apps", input);
-          if (fs.existsSync(serviceDir)) {
-            return `Service "${input}" already exists`;
-          }
-          return true;
-        },
-      },
-      {
-        type: "input",
-        name: "port",
-        message: "What port should the service run on?",
-        default: () => getNextAvailablePort(rootPath).toString(),
-        validate: (input: string) => {
-          const port = Number.parseInt(input, 10);
-          if (Number.isNaN(port) || port < 1 || port > 65535) {
-            return "Port must be a valid number between 1 and 65535";
-          }
-          return true;
-        },
-      },
-      {
-        type: "input",
-        name: "description",
-        message: "Brief description of the service:",
-        default: (answers: { serviceName: string }) =>
-          `${answers.serviceName.charAt(0).toUpperCase() + answers.serviceName.slice(1)} microservice with Temporal workflows`,
-      },
-      {
-        type: "input",
-        name: "workflowName",
-        message: "Name of the initial workflow (e.g., 'process', 'handle'):",
-        default: "process",
-        validate: (input: string) => {
-          if (!input || input.trim() === "") {
-            return "Workflow name is required";
-          }
-          if (!/^[a-z][a-zA-Z0-9]*$/.test(input)) {
-            return "Workflow name must be camelCase";
-          }
-          return true;
-        },
-      },
-      {
-        type: "confirm",
-        name: "includeEmail",
-        message: "Include Email module (@projectx/email)?",
-        default: true,
-      },
-      {
-        type: "confirm",
-        name: "includePayment",
-        message: "Include Payment module (@projectx/payment)?",
-        default: false,
-      },
-    ],
-    actions: (answers) => {
-      if (!answers) return [];
-
-      const debugPort = getNextDebugPort(rootPath);
-      const data = {
-        ...answers,
-        debugPort,
-        hasTemporal: true,
-      };
-
-      const actions: PlopTypes.ActionType[] = [
-        // Package files
-        {
-          type: "add",
-          path: "apps/{{serviceName}}/package.json",
-          templateFile: "templates/nestjs-temporal-service/package.json.hbs",
-          data,
-        },
-        {
-          type: "add",
-          path: "apps/{{serviceName}}/tsconfig.json",
-          templateFile: "templates/nestjs-temporal-service/tsconfig.json.hbs",
-          data,
-        },
-        {
-          type: "add",
-          path: "apps/{{serviceName}}/nest-cli.json",
-          templateFile: "templates/nestjs-temporal-service/nest-cli.json.hbs",
-          data,
-        },
-        // Source files
-        {
-          type: "add",
-          path: "apps/{{serviceName}}/src/main.ts",
-          templateFile: "templates/nestjs-temporal-service/src/main.ts.hbs",
-          data,
-        },
-        // App files
-        {
-          type: "add",
-          path: "apps/{{serviceName}}/src/app/app.module.ts",
-          templateFile:
-            "templates/nestjs-temporal-service/src/app/app.module.ts.hbs",
-          data,
-        },
-        {
-          type: "add",
-          path: "apps/{{serviceName}}/src/app/app.controller.ts",
-          templateFile:
-            "templates/nestjs-temporal-service/src/app/app.controller.ts.hbs",
-          data,
-        },
-        {
-          type: "add",
-          path: "apps/{{serviceName}}/src/app/app.service.ts",
-          templateFile:
-            "templates/nestjs-temporal-service/src/app/app.service.ts.hbs",
-          data,
-        },
-        {
-          type: "add",
-          path: "apps/{{serviceName}}/src/app/app.controller.spec.ts",
-          templateFile:
-            "templates/nestjs-temporal-service/src/app/app.controller.spec.ts.hbs",
-          data,
-        },
-        // Activities
-        {
-          type: "add",
-          path: "apps/{{serviceName}}/src/app/activities/activities.module.ts",
-          templateFile:
-            "templates/nestjs-temporal-service/src/app/activities/activities.module.ts.hbs",
-          data,
-        },
-        {
-          type: "add",
-          path: "apps/{{serviceName}}/src/app/activities/activities.service.ts",
-          templateFile:
-            "templates/nestjs-temporal-service/src/app/activities/activities.service.ts.hbs",
-          data,
-        },
-        // Workflows
-        {
-          type: "add",
-          path: "apps/{{serviceName}}/src/workflows/index.ts",
-          templateFile:
-            "templates/nestjs-temporal-service/src/workflows/index.ts.hbs",
-          data,
-        },
-        {
-          type: "add",
-          path: "apps/{{serviceName}}/src/workflows/{{workflowName}}.workflow.ts",
-          templateFile:
-            "templates/nestjs-temporal-service/src/workflows/workflow.ts.hbs",
-          data,
-        },
-        // Config files
-        {
-          type: "add",
-          path: "apps/{{serviceName}}/src/config/app.config.ts",
-          templateFile:
-            "templates/nestjs-temporal-service/src/config/app.config.ts.hbs",
-          data,
-        },
-        {
-          type: "add",
-          path: "apps/{{serviceName}}/src/config/env.config.ts",
-          templateFile:
-            "templates/nestjs-temporal-service/src/config/env.config.ts.hbs",
-          data,
-        },
-        {
-          type: "add",
-          path: "apps/{{serviceName}}/src/config/swagger.config.ts",
-          templateFile:
-            "templates/nestjs-temporal-service/src/config/swagger.config.ts.hbs",
-          data,
-        },
-        {
-          type: "add",
-          path: "apps/{{serviceName}}/src/config/temporal.config.ts",
-          templateFile:
-            "templates/nestjs-temporal-service/src/config/temporal.config.ts.hbs",
-          data,
-        },
-        // Test files
-        {
-          type: "add",
-          path: "apps/{{serviceName}}/test/jest-e2e.json",
-          templateFile:
-            "templates/nestjs-temporal-service/test/jest-e2e.json.hbs",
-          data,
-        },
-        {
-          type: "add",
-          path: "apps/{{serviceName}}/test/app.e2e-spec.ts",
-          templateFile:
-            "templates/nestjs-temporal-service/test/app.e2e-spec.ts.hbs",
-          data,
-        },
-      ];
-
-      // Phase 3: Add automation actions (same as basic service)
-      actions.push(
-        {
-          type: "modify",
-          path: "package.json",
-          transform: (content: string, ans: Record<string, unknown>) => {
-            const pkg = JSON.parse(content);
-            const svcName = ans.serviceName as string;
-
-            pkg.scripts[`dev:${svcName}`] = `turbo run dev --filter=${svcName}`;
-            pkg.scripts[`build:${svcName}`] =
-              `turbo run build --filter=${svcName}`;
-
-            const sortedScripts: Record<string, string> = {};
-            for (const key of Object.keys(pkg.scripts).sort()) {
-              sortedScripts[key] = pkg.scripts[key];
-            }
-            pkg.scripts = sortedScripts;
-
-            return JSON.stringify(pkg, null, 2);
-          },
-        } as PlopTypes.ActionType,
-        {
-          type: "modify",
-          path: "docker-compose.yml",
-          transform: (content: string, ans: Record<string, unknown>) => {
-            const svcName = ans.serviceName as string;
-            const svcPort = ans.port as string;
-            const upperName = svcName.toUpperCase().replace(/-/g, "_");
-
-            const insertMarker = "  ngrok-order:";
-            const serviceBlock = `
-  ${svcName}:
-    <<: *service-common
-    container_name: ${svcName}
-    init: true
-    depends_on:
-      builder:
-        condition: service_completed_successfully
-    command:
-      - /bin/sh
-      - -c
-      - |
-        cd /app/apps/${svcName} && \\
-        exec pnpm start:debug
-    ports:
-      - "\${${upperName}_PORT:-${svcPort}}:\${${upperName}_PORT:-${svcPort}}"
-      - "${debugPort}:${debugPort}"
-
-`;
-            if (content.includes(insertMarker)) {
-              return content.replace(insertMarker, serviceBlock + insertMarker);
-            }
-            return content.replace(/\nnetworks:/, `${serviceBlock}\nnetworks:`);
-          },
-        } as PlopTypes.ActionType,
-        {
-          type: "modify",
-          path: "docker-compose.yml",
-          transform: (content: string, ans: Record<string, unknown>) => {
-            const svcName = ans.serviceName as string;
-            const nodeModulesLine = `    - /app/apps/${svcName}/node_modules`;
-
-            const appsNodeModulesPattern =
-              /( {4}- \/app\/apps\/\w+\/node_modules\n)( {4}# Packages node_modules)/;
-            if (appsNodeModulesPattern.test(content)) {
-              return content.replace(
-                appsNodeModulesPattern,
-                `$1${nodeModulesLine}\n$2`,
-              );
-            }
-            return content;
-          },
-        } as PlopTypes.ActionType,
-        {
-          type: "modify",
-          path: "docker-compose.yml",
-          transform: (content: string, ans: Record<string, unknown>) => {
-            const svcName = ans.serviceName as string;
-
-            const builderPattern =
-              /(pnpm turbo run build --filter=auth\^\.\.\. --filter=order\^\.\.\. --filter=product\^\.\.\.[^&]*)( &&)/;
-            if (builderPattern.test(content)) {
-              return content.replace(
-                builderPattern,
-                `$1 --filter=${svcName}^...$2`,
-              );
-            }
-            return content;
-          },
-        } as PlopTypes.ActionType,
-      );
-
-      // Final message
-      actions.push({
-        type: "add",
-        path: "apps/{{serviceName}}/.generated",
-        template: `Temporal-enabled service generated successfully!
-
-Next steps:
-1. Add {{upperSnakeCase serviceName}}_PORT={{port}} to your .env file
-2. Run: pnpm install
-3. Run: pnpm dev:{{serviceName}}
-
-Your service will be available at: http://localhost:{{port}}/{{serviceName}}
-Swagger docs: http://localhost:{{port}}/{{serviceName}}/docs
-Temporal UI: http://localhost:8080 (to monitor workflows)
-
-Task Queue: {{serviceName}}
-Initial Workflow: {{workflowName}}{{pascalCase serviceName}}Workflow
-`,
-        data,
-      });
-
-      return actions;
-    },
-  });
-
-  // ============================================
-  // Workflow Generator (add to existing service)
+  // Temporal workflow + activity in apps/api
   // ============================================
   plop.setGenerator("workflow", {
-    description: "Add a new Temporal workflow to an existing service",
+    description:
+      "Add a Temporal workflow to apps/api with its activity, registry wiring and a TestWorkflowEnvironment test",
     prompts: [
       {
-        type: "list",
-        name: "serviceName",
-        message: "Which service should the workflow be added to?",
-        choices: () => {
-          const appsDir = path.join(rootPath, "apps");
-          if (!fs.existsSync(appsDir)) return [];
-
-          return fs
-            .readdirSync(appsDir, { withFileTypes: true })
-            .filter((dirent) => {
-              if (!dirent.isDirectory()) return false;
-              // Check if it has Temporal config
-              const temporalConfig = path.join(
-                appsDir,
-                dirent.name,
-                "src/config/temporal.config.ts",
-              );
-              return fs.existsSync(temporalConfig);
-            })
-            .map((dirent) => dirent.name);
-        },
-      },
-      {
         type: "input",
-        name: "workflowName",
-        message:
-          "What is the name of the workflow (e.g., 'checkout', 'refund')?",
+        name: "name",
+        message: "Workflow name (camelCase, e.g. 'sendReport', 'onboarding'):",
         validate: (input: string) => {
-          if (!input || input.trim() === "") {
-            return "Workflow name is required";
+          if (!/^[a-z][a-zA-Z0-9]*$/.test(input ?? "")) {
+            return "Use camelCase, starting with a lowercase letter";
           }
-          if (!/^[a-z][a-zA-Z0-9]*$/.test(input)) {
-            return "Workflow name must be camelCase";
+          const layout = resolveLayout(rootPath);
+          const file = `${layout.workflowsDir}/${kebabCase(input)}.workflow.ts`;
+          if (fs.existsSync(path.join(rootPath, file))) {
+            return `${file} already exists`;
           }
           return true;
         },
       },
       {
         type: "input",
-        name: "workflowDescription",
-        message: "Brief description of the workflow:",
-        default: (answers: { workflowName: string }) =>
-          `Handles ${answers.workflowName} process`,
-      },
-    ],
-    actions: [
-      {
-        type: "add",
-        path: "apps/{{serviceName}}/src/workflows/{{workflowName}}.workflow.ts",
-        templateFile: "templates/workflow/workflow.ts.hbs",
+        name: "feature",
+        message:
+          "Feature module that owns the activity (kebab-case; created if missing):",
+        default: (answers: { name: string }) => kebabCase(answers.name),
+        validate: (input: string) =>
+          /^[a-z][a-z0-9-]*$/.test(input ?? "") ||
+          "Use lowercase letters, numbers and hyphens, starting with a letter",
       },
       {
-        type: "modify",
-        path: "apps/{{serviceName}}/src/workflows/index.ts",
-        transform: (content: string, ans: Record<string, unknown>) => {
-          const wfName = ans.workflowName as string;
-          const exportLine = `export * from "./${wfName}.workflow";`;
-          if (content.includes(exportLine)) return content;
-          return `${content.trim()}\n${exportLine}\n`;
+        type: "input",
+        name: "activity",
+        message: "Activity method name (camelCase, unique across activities):",
+        default: (answers: { name: string }) =>
+          `run${pascalCase(answers.name)}`,
+        validate: (input: string) => {
+          if (!/^[a-z][a-zA-Z0-9]*$/.test(input ?? "")) {
+            return "Use camelCase, starting with a lowercase letter";
+          }
+          const layout = resolveLayout(rootPath);
+          const registry = readFile(
+            rootPath,
+            `${layout.activitiesDir}/activities.service.ts`,
+          );
+          if (new RegExp(`\\b${input}\\s*\\(`).test(registry)) {
+            return `ActivitiesService already has an activity named ${input}`;
+          }
+          return true;
         },
       },
+      {
+        type: "input",
+        name: "description",
+        message: "Short description of the workflow:",
+        default: (answers: { name: string }) =>
+          `Runs the ${kebabCase(answers.name).replace(/-/g, " ")} process`,
+      },
     ],
+    actions: (answers) => {
+      if (!answers) return [];
+      const layout = resolveLayout(rootPath);
+      const name = answers.name as string;
+      const fileBase = kebabCase(name);
+      const feature = kebabCase(answers.feature as string);
+      const activity = answers.activity as string;
+
+      const workflowFile = `${layout.workflowsDir}/${fileBase}.workflow.ts`;
+      const specFile = `${layout.workflowsDir}/${fileBase}.workflow.spec.ts`;
+      const featureDir = `${layout.featuresDir}/${feature}`;
+      const featureActivitiesFile = `${featureDir}/${feature}.activities.ts`;
+      const featureClass = `${pascalCase(feature)}Activities`;
+      // Reuse the module that already provides the feature's activity class
+      // (e.g. auth-activities.module.ts), else <feature>.module.ts
+      const featureModuleFile =
+        findModuleProviding(rootPath, featureDir, featureClass) ??
+        `${featureDir}/${feature}.module.ts`;
+      const featureModuleClass =
+        moduleClassName(rootPath, featureModuleFile) ??
+        `${pascalCase(feature)}Module`;
+      const activitiesModuleFile = `${layout.activitiesDir}/activities.module.ts`;
+      const activitiesServiceFile = `${layout.activitiesDir}/activities.service.ts`;
+      const noExt = (file: string) => file.replace(/\.ts$/, "");
+
+      const workflowPascal = pascalCase(name);
+      const featureProp = `${camelCase(feature)}Activities`;
+      const inputType = `${workflowPascal}WorkflowInput`;
+      const resultType = `${workflowPascal}WorkflowResult`;
+
+      const data = {
+        name,
+        fileBase,
+        activity,
+        description: answers.description as string,
+        workflowFn: `${name}Workflow`,
+        inputType,
+        resultType,
+        featureClass,
+        featureModuleClass,
+        activitiesServiceImport: importPath(
+          workflowFile,
+          noExt(activitiesServiceFile),
+        ),
+        workflowImportFromFeature: importPath(
+          featureActivitiesFile,
+          noExt(workflowFile),
+        ),
+        specActivitiesModuleImport: importPath(
+          specFile,
+          noExt(activitiesModuleFile),
+        ),
+        specActivitiesServiceImport: importPath(
+          specFile,
+          noExt(activitiesServiceFile),
+        ),
+        specFeatureActivitiesImport: importPath(
+          specFile,
+          noExt(featureActivitiesFile),
+        ),
+        specDiscoverImport: layout.discoverFile
+          ? importPath(specFile, noExt(layout.discoverFile))
+          : undefined,
+      };
+
+      const actions: PlopTypes.ActionType[] = [
+        {
+          type: "add",
+          path: workflowFile,
+          templateFile: "templates/workflow/workflow.ts.hbs",
+          data,
+        },
+        {
+          type: "modify",
+          path: `${layout.workflowsDir}/index.ts`,
+          transform: (content: string) => {
+            const line = `export * from "./${fileBase}.workflow";`;
+            if (content.includes(line)) return content;
+            return `${content.trimEnd()}\n${line}\n`;
+          },
+        },
+        {
+          type: "add",
+          path: specFile,
+          templateFile: "templates/workflow/workflow.spec.ts.hbs",
+          data,
+        },
+      ];
+
+      // Feature activity class: create it, or add the method to the existing one
+      if (fs.existsSync(path.join(rootPath, featureActivitiesFile))) {
+        actions.push({
+          type: "modify",
+          path: featureActivitiesFile,
+          transform: (content: string) => {
+            let next = addImport(
+              content,
+              `import type { ${inputType}, ${resultType} } from "${data.workflowImportFromFeature}";`,
+            );
+            next = addClassMember(
+              next,
+              featureClass,
+              [
+                `  async ${activity}(input: ${inputType}): Promise<${resultType}> {`,
+                `    this.logger.log(\`${activity}(\${input.id})\`);`,
+                "    // TODO: do the real work here (database, email, HTTP call...)",
+                "    return { id: input.id, processedAt: new Date().toISOString() };",
+                "  }",
+              ].join("\n"),
+            );
+            if (!/\blogger\b/.test(content)) {
+              next = ensureNamedImport(next, "Logger", "@nestjs/common");
+              next = next.replace(
+                new RegExp(`(export\\s+class\\s+${featureClass}\\b[^{]*\\{)`),
+                `$1\n  private readonly logger = new Logger(${featureClass}.name);\n`,
+              );
+            }
+            return next;
+          },
+        });
+      } else {
+        actions.push({
+          type: "add",
+          path: featureActivitiesFile,
+          templateFile: "templates/workflow/activities.ts.hbs",
+          data,
+        });
+      }
+
+      // Feature module: provide and export the activity class
+      if (fs.existsSync(path.join(rootPath, featureModuleFile))) {
+        actions.push({
+          type: "modify",
+          path: featureModuleFile,
+          transform: (content: string) => {
+            let next = addImport(
+              content,
+              `import { ${featureClass} } from "${importPath(featureModuleFile, noExt(featureActivitiesFile))}";`,
+            );
+            next = addToModuleArray(next, "providers", featureClass);
+            return addToModuleArray(next, "exports", featureClass);
+          },
+        });
+      } else {
+        actions.push({
+          type: "add",
+          path: featureModuleFile,
+          templateFile: "templates/workflow/feature.module.ts.hbs",
+          data: { ...data, feature },
+        });
+      }
+
+      actions.push(
+        // ActivitiesModule imports the feature module
+        {
+          type: "modify",
+          path: activitiesModuleFile,
+          transform: (content: string) => {
+            const next = addImport(
+              content,
+              `import { ${featureModuleClass} } from "${importPath(activitiesModuleFile, noExt(featureModuleFile))}";`,
+            );
+            return addToModuleArray(next, "imports", featureModuleClass);
+          },
+        },
+        // ActivitiesService injects the class and delegates one method to it
+        {
+          type: "modify",
+          path: activitiesServiceFile,
+          transform: (content: string) => {
+            let next = ensureNamedImport(content, "Inject", "@nestjs/common");
+            next = addImport(
+              next,
+              `import { ${featureClass} } from "${importPath(activitiesServiceFile, noExt(featureActivitiesFile))}";`,
+            );
+            next = addConstructorParam(
+              next,
+              "ActivitiesService",
+              `@Inject(${featureClass})\n    private readonly ${featureProp}: ${featureClass}`,
+              featureProp,
+            );
+            return addClassMember(
+              next,
+              "ActivitiesService",
+              [
+                `  ${activity}(...args: Parameters<${featureClass}["${activity}"]>) {`,
+                `    return this.${featureProp}.${activity}(...args);`,
+                "  }",
+              ].join("\n"),
+            );
+          },
+        },
+        () =>
+          formatFiles(rootPath, [
+            workflowFile,
+            `${layout.workflowsDir}/index.ts`,
+            specFile,
+            featureActivitiesFile,
+            featureModuleFile,
+            activitiesModuleFile,
+            activitiesServiceFile,
+          ]),
+      );
+
+      return actions;
+    },
   });
 }

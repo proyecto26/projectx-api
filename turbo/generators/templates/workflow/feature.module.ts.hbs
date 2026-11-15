@@ -1,0 +1,9 @@
+import { Module } from "@nestjs/common";
+
+import { {{featureClass}} } from "./{{feature}}.activities";
+
+@Module({
+  providers: [{{featureClass}}],
+  exports: [{{featureClass}}],
+})
+export class {{featureModuleClass}} {}

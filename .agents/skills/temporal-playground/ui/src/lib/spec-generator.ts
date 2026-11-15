@@ -165,8 +165,8 @@ export function generateNL(
     );
   } else {
     parts.push(
-      "  - Follow patterns in apps/order/src/workflows/order.workflow.ts",
-      "  - Use `pnpm cli generate workflow` to scaffold, then customize",
+      "  - Follow patterns in apps/api/src/workflows/login.workflow.ts",
+      "  - Use `pnpm gen:workflow` (or `pnpm cli generate workflow`) to scaffold the workflow, its feature activity and the ActivitiesService delegating method, then customize",
       "  - Add signal/query/update definitions to @projectx/core",
     );
   }

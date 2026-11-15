@@ -2,7 +2,7 @@
   "name": "@projectx/cli",
   "version": "1.0.0",
   "private": true,
-  "description": "ProjectX CLI - Generate services, workflows, and customize your Temporal-powered application",
+  "description": "ProjectX API CLI - add modules and Temporal workflows to apps/api and customize the template",
   "type": "module",
   "main": "./dist/index.js",
   "bin": {
@@ -19,7 +19,7 @@
   "keywords": [
     "temporal",
     "nestjs",
-    "microservices",
+    "api",
     "cli",
     "generator",
     "scaffolding"

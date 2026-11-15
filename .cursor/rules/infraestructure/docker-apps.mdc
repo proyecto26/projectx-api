@@ -1,17 +1,15 @@
 ---
-description: Docker configuration for application services (auth, order, product, web)
-globs: 
+description: Docker configuration for the API service (apps/api)
+globs:
   - docker-compose.yml
   - Dockerfile
 alwaysApply: false
 ---
-# Docker Application Services
+# Docker Application Service
 ## Service Overview
 ### Application Services
-- `auth` (NestJS - Port 8081, Debug 9229)
-- `order` (NestJS - Port 8082, Debug 9230)
-- `product` (NestJS - Port 8083, Debug 9231)
-- `web` (React Router SSR - Port 3000) - Optional
+- `builder` - one-shot: installs dependencies, generates the Prisma client, builds `@projectx/api`'s dependencies, migrates and seeds the database
+- `api` (NestJS `@projectx/api` - Port `${API_PORT:-8081}`, Debug `${API_DEBUG_PORT:-9229}`)
 ## Common Service Template
 ### Shared Configuration
 ```yaml
@@ -23,44 +21,45 @@ x-service-common: &service-common
     - .:/app
     - /app/node_modules
 ```
-All services inherit from this base configuration to ensure consistency.
-## NestJS Service Pattern
-### Standard NestJS Service
+The `builder` and `api` services inherit from this base configuration.
+## Builder + API Pattern
 ```yaml
-service-name:
+builder:
   <<: *service-common
-  build:
-    context: .
-    dockerfile: Dockerfile
-    target: development
-  command: >
-    sh -c "pnpm install --frozen-lockfile &&
-           pnpm turbo run build --filter=service-name^... &&
-           pnpm --filter @projectx/db run prisma:generate &&
-           pnpm --filter @projectx/db run prisma:migrate &&
-           cd /app/apps/service-name &&
-           pnpm start:dev"
-  environment:
-    - NODE_ENV=development
-    - WATCHPACK_POLLING=true
-    - CHOKIDAR_USEPOLLING=true
-    - CHOKIDAR_INTERVAL=500
-  ports:
-    - "PORT:PORT"
-    - "DEBUG_PORT:DEBUG_PORT"
+  restart: "no"
+  command:
+    - /bin/sh
+    - -c
+    - |
+      pnpm install --frozen-lockfile && \
+      pnpm --filter @projectx/db run prisma:generate && \
+      pnpm turbo run build --filter=@projectx/api^... && \
+      pnpm --filter @projectx/db run prisma:migrate && \
+      pnpm --filter @projectx/db run prisma:seed
+
+api:
+  <<: *service-common
   depends_on:
-    db:
-      condition: service_healthy
-    temporal:
-      condition: service_healthy
+    builder:
+      condition: service_completed_successfully
+    temporal-create-namespace:
+      condition: service_completed_successfully
+  command:
+    - /bin/sh
+    - -c
+    - |
+      cd /app/apps/api && \
+      exec pnpm start:debug
+  ports:
+    - "${API_PORT:-8081}:${API_PORT:-8081}"
+    - "${API_DEBUG_PORT:-9229}:9229"
 ```
-### Build Process for Apps
-1. Install dependencies with `pnpm install --frozen-lockfile`
-2. Build package dependencies with Turborepo filter
-3. Generate Prisma client
-4. Run Prisma migrations
-5. Start service in watch mode
-## Environment Variables for Apps
+### Build Process
+1. `builder` installs dependencies with `pnpm install --frozen-lockfile`
+2. Generates the Prisma client and builds the API's workspace dependencies (`--filter=@projectx/api^...`)
+3. Runs Prisma migrations and the seed (roles + `ADMIN_EMAILS` admins)
+4. `api` starts in watch/debug mode once the builder finished and the Temporal namespace exists
+## Environment Variables for the API
 ### Common Variables
 ```yaml
 environment:
@@ -69,6 +68,7 @@ environment:
   - TEMPORAL_HOST=temporal:7233
   - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-default}
 ```
+`API_PORT`, `JWT_SECRET`, `ADMIN_EMAILS` and `SENDGRID_API_KEY` come from `.env` (see `.env.example`). With an empty `SENDGRID_API_KEY` in development, the login code is printed to the API log.
 ### File Watching (Hot Reload)
 ```yaml
 environment:
@@ -76,102 +76,55 @@ environment:
   - CHOKIDAR_USEPOLLING=true
   - CHOKIDAR_INTERVAL=500
 ```
-These enable hot reload in Docker containers.
 ## Volume Mounts
-### Application Code
 ```yaml
 volumes:
   - .:/app  # Mount entire monorepo
   - /app/node_modules  # Prevent overwriting root node_modules
-  - /app/apps/service-name/node_modules  # Service-specific node_modules
-  - /app/packages/*/node_modules  # Package node_modules
+  - /app/apps/api/node_modules
+  - /app/packages/*/node_modules
 ```
 **Why anonymous volumes?** Prevents Docker from overwriting node_modules installed inside the container.
-## Health Checks for Apps
-### Application Health Check
+## Health Check
 ```yaml
 healthcheck:
-  test: ["CMD", "curl", "-f", "http://localhost:PORT/health"]
+  test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
   interval: 30s
   timeout: 3s
   retries: 3
   start_period: 40s
 ```
-All NestJS apps expose a `/health` endpoint via `@nestjs/terminus`.
-## Service Dependencies
-### Startup Order
-```yaml
-depends_on:
-  db:
-    condition: service_healthy
-  temporal:
-    condition: service_healthy
-```
-Apps wait for infrastructure services to be healthy before starting.
-## Port Mappings
-| Service | App Port | Debug Port |
-|---------|----------|------------|
-| auth    | 8081     | 9229       |
-| order   | 8082     | 9230       |
-| product | 8083     | 9231       |
-| web     | 3000     | N/A        |
+`/health` reports the database and Temporal (client ready, namespace reachable, worker running).
 ## Common Commands
-### Start All Apps
 ```bash
-docker compose up -d auth order product web
-```
-### Start Specific App
-```bash
-docker compose up -d auth
-```
-### View App Logs
-```bash
-docker compose logs -f auth
-docker compose logs -f auth order product
-```
-### Restart App
-```bash
-docker compose restart auth
-```
-### Rebuild App
-```bash
-docker compose up -d --build auth
-```
-### Execute Commands in App Container
-```bash
-docker compose exec auth sh
-docker compose exec auth pnpm prisma studio
+docker compose up -d                 # Everything: db, Temporal, builder, api
+docker compose logs -f api           # API logs (login codes appear here in development)
+docker compose restart api
+docker compose up -d --build api
+docker compose exec api sh
+docker compose run --rm builder      # Re-run install/build/migrate/seed
 ```
 ## Troubleshooting
-### App Won't Start
-1. Check logs: `docker compose logs auth`
-2. Verify dependencies are healthy: `docker compose ps`
+### API Won't Start
+1. Check logs: `docker compose logs builder api`
+2. Verify dependencies completed/healthy: `docker compose ps -a`
 3. Check environment variables in `.env`
-4. Ensure ports are not in use: `lsof -i :8081`
+4. Ensure the port is free: `lsof -i :8081`
 ### Hot Reload Not Working
 1. Verify `WATCHPACK_POLLING=true` is set
 2. Check volume mounts are correct
-3. Ensure `node_modules` volumes are anonymous
-4. Restart: `docker compose restart auth`
-### Build Failures
-1. Clear cache: `docker compose build --no-cache auth`
-2. Check Dockerfile syntax
-3. Verify all dependencies are in package.json
-4. Check Turborepo filter syntax
+3. Restart: `docker compose restart api`
 ### Database Connection Issues
-1. Ensure `db` service is healthy
+1. Ensure `db` is healthy
 2. Verify `DATABASE_URL` format
-3. Check network connectivity: `docker compose exec auth ping db`
-4. Verify Prisma migrations ran successfully
+3. Check connectivity: `docker compose exec api ping db`
+4. Verify the builder ran the migrations: `docker compose logs builder`
 ## Best Practices
-1. **Use health checks** - Ensure services are ready before dependent services start
-2. **Set restart policies** - Use `unless-stopped` for apps
-3. **Enable file watching** - For hot reload in development
-4. **Use anonymous volumes** - For `node_modules` to prevent overwriting
-5. **Check logs regularly** - Monitor service health and errors
-6. **Use proper dependencies** - Ensure `depends_on` conditions are correct
+1. **Use health checks and `depends_on` conditions** - the API waits for the builder and the namespace setup
+2. **Set restart policies** - `unless-stopped` for the API, `"no"` for one-shot jobs
+3. **Use anonymous volumes** for `node_modules`
 ## References
 - Dockerfile: `/Dockerfile`
 - Docker Compose: `/docker-compose.yml`
-- App configs: `/apps/*/src/config/`
+- App config: `/apps/api/src/config/`
 - Environment variables: `/.env`

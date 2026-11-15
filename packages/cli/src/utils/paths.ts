@@ -1,8 +1,12 @@
 import path from "node:path";
 import fs from "fs-extra";
 
+/** The single NestJS + Temporal app of the template. */
+export const API_APP_DIR = "apps/api";
+
 /**
- * Find the root of the ProjectX monorepo by looking for turbo.json
+ * Find the root of the monorepo by looking for turbo.json next to a
+ * package.json that declares workspaces.
  */
 export function findProjectRoot(
   startDir: string = process.cwd(),
@@ -26,102 +30,74 @@ export function findProjectRoot(
   return null;
 }
 
-/**
- * Get the apps directory path
- */
-export function getAppsDir(projectRoot: string): string {
-  return path.join(projectRoot, "apps");
+export interface ApiLayout {
+  /** Absolute path of apps/api */
+  appDir: string;
+  /** Absolute path of the directory holding feature modules */
+  featuresDir: string;
+  /** Absolute path of the activity registry directory */
+  activitiesDir: string;
+  /** Absolute path of apps/api/src/workflows */
+  workflowsDir: string;
 }
 
 /**
- * Get the packages directory path
+ * Locate the parts of apps/api the generators touch: the activity registry
+ * (src/activities/) and the feature modules, which live next to app.module.ts.
  */
-export function getPackagesDir(projectRoot: string): string {
-  return path.join(projectRoot, "packages");
+export function getApiLayout(projectRoot: string): ApiLayout | null {
+  const appDir = path.join(projectRoot, API_APP_DIR);
+  const srcDir = path.join(appDir, "src");
+  const activitiesDir = [
+    path.join(srcDir, "activities"),
+    path.join(srcDir, "app", "activities"),
+  ].find((dir) => fs.existsSync(path.join(dir, "activities.service.ts")));
+  if (!activitiesDir) return null;
+  const appModule = [
+    path.join(srcDir, "app", "app.module.ts"),
+    path.join(srcDir, "app.module.ts"),
+  ].find((file) => fs.existsSync(file));
+  return {
+    appDir,
+    featuresDir: appModule ? path.dirname(appModule) : srcDir,
+    activitiesDir,
+    workflowsDir: path.join(srcDir, "workflows"),
+  };
 }
 
-/**
- * Check if a service exists
- */
-export function serviceExists(
-  projectRoot: string,
-  serviceName: string,
-): boolean {
-  const servicePath = path.join(getAppsDir(projectRoot), serviceName);
-  return fs.existsSync(servicePath);
+/** Activity methods registered on ActivitiesService. */
+export function getActivityNames(layout: ApiLayout): string[] {
+  const file = path.join(layout.activitiesDir, "activities.service.ts");
+  if (!fs.existsSync(file)) return [];
+  const content = fs.readFileSync(file, "utf-8");
+  return [...content.matchAll(/^ {2}(?:async\s+)?([a-zA-Z]\w*)\s*\(/gm)]
+    .map((match) => match[1] as string)
+    .filter((name) => name !== "constructor")
+    .sort();
 }
 
-/**
- * Get list of existing services
- */
-export function getExistingServices(projectRoot: string): string[] {
-  const appsDir = getAppsDir(projectRoot);
-  if (!fs.existsSync(appsDir)) return [];
-
+/** Feature modules of apps/api (directories with a `*.module.ts`). */
+export function getModules(layout: ApiLayout): string[] {
+  if (!fs.existsSync(layout.featuresDir)) return [];
   return fs
-    .readdirSync(appsDir, { withFileTypes: true })
-    .filter((dirent) => dirent.isDirectory())
-    .map((dirent) => dirent.name);
+    .readdirSync(layout.featuresDir, { withFileTypes: true })
+    .filter(
+      (dirent) =>
+        dirent.isDirectory() &&
+        fs
+          .readdirSync(path.join(layout.featuresDir, dirent.name))
+          .some((file) => file.endsWith(".module.ts")),
+    )
+    .map((dirent) => dirent.name)
+    .sort();
 }
 
-/**
- * Get list of Temporal-enabled services
- */
-export function getTemporalServices(projectRoot: string): string[] {
-  const appsDir = getAppsDir(projectRoot);
-  if (!fs.existsSync(appsDir)) return [];
-
+/** Workflow files of apps/api (`*.workflow.ts`, without the suffix). */
+export function getWorkflows(layout: ApiLayout): string[] {
+  if (!fs.existsSync(layout.workflowsDir)) return [];
   return fs
-    .readdirSync(appsDir, { withFileTypes: true })
-    .filter((dirent) => {
-      if (!dirent.isDirectory()) return false;
-      const temporalConfig = path.join(
-        appsDir,
-        dirent.name,
-        "src/config/temporal.config.ts",
-      );
-      return fs.existsSync(temporalConfig);
-    })
-    .map((dirent) => dirent.name);
-}
-
-/**
- * Get next available port based on existing services
- */
-export function getNextAvailablePort(projectRoot: string): number {
-  const appsDir = getAppsDir(projectRoot);
-  const defaultPorts = [8081, 8082, 8083]; // auth, order, product
-
-  if (!fs.existsSync(appsDir)) {
-    return Math.max(...defaultPorts) + 1;
-  }
-
-  const existingPorts = [...defaultPorts];
-  const services = getExistingServices(projectRoot);
-
-  for (const service of services) {
-    const appConfigPath = path.join(
-      appsDir,
-      service,
-      "src/config/app.config.ts",
-    );
-    if (fs.existsSync(appConfigPath)) {
-      const content = fs.readFileSync(appConfigPath, "utf-8");
-      const portMatch = content.match(/\|\|\s*(\d+)/);
-      if (portMatch?.[1]) {
-        existingPorts.push(Number.parseInt(portMatch[1], 10));
-      }
-    }
-  }
-
-  return Math.max(...existingPorts) + 1;
-}
-
-/**
- * Get next available debug port
- */
-export function getNextDebugPort(projectRoot: string): number {
-  const baseDebugPort = 9229;
-  const services = getExistingServices(projectRoot);
-  return baseDebugPort + services.length;
+    .readdirSync(layout.workflowsDir)
+    .filter((file) => file.endsWith(".workflow.ts"))
+    .map((file) => file.replace(/\.workflow\.ts$/, ""))
+    .sort();
 }

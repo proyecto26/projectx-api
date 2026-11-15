@@ -1,0 +1,34 @@
+import { Controller, Get, HttpCode, HttpStatus, Inject, UseGuards } from "@nestjs/common";
+import {
+  ApiBearerAuth,
+  ApiOkResponse,
+  ApiOperation,
+  ApiTags,
+  ApiUnauthorizedResponse,
+} from "@nestjs/swagger";
+import { JwtAuthGuard } from "@projectx/core";
+
+import { {{pascalCase name}}Service } from "./{{name}}.service";
+
+@ApiBearerAuth()
+@ApiTags("{{pascalCase name}}")
+@UseGuards(JwtAuthGuard)
+@Controller("{{name}}")
+export class {{pascalCase name}}Controller {
+  constructor(
+    @Inject({{pascalCase name}}Service)
+    private readonly {{camelCase name}}Service: {{pascalCase name}}Service,
+  ) {}
+
+  @ApiOperation({
+    summary: "List {{name}}",
+    description: "{{description}}",
+  })
+  @ApiOkResponse({ description: "The list was retrieved successfully" })
+  @ApiUnauthorizedResponse({ description: "Missing or invalid access token" })
+  @Get()
+  @HttpCode(HttpStatus.OK)
+  findAll() {
+    return this.{{camelCase name}}Service.findAll();
+  }
+}

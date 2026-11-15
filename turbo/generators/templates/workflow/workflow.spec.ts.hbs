@@ -1,0 +1,94 @@
+import { randomUUID } from "node:crypto";
+import { ConfigModule } from "@nestjs/config";
+import { Test, type TestingModule } from "@nestjs/testing";
+import { PrismaService } from "@projectx/db";
+import { EmailService } from "@projectx/email";
+{{#unless specDiscoverImport}}
+import { RESTRICTED_PROPERTIES } from "@proyecto26/temporal-workflows";
+{{/unless}}
+import { TestWorkflowEnvironment } from "@temporalio/testing";
+import { Worker } from "@temporalio/worker";
+
+import { ActivitiesModule } from "{{specActivitiesModuleImport}}";
+import { ActivitiesService } from "{{specActivitiesServiceImport}}";
+{{#if specDiscoverImport}}
+import { discoverActivities } from "{{specDiscoverImport}}";
+{{/if}}
+import { {{featureClass}} } from "{{specFeatureActivitiesImport}}";
+import { {{workflowFn}} } from "./{{fileBase}}.workflow";
+
+{{#unless specDiscoverImport}}
+/**
+ * Same discovery the Temporal worker of @proyecto26/temporal-workflows uses:
+ * the functions on the immediate prototype of ActivitiesService, bound to it.
+ */
+function discoverActivities(
+  service: object,
+): Record<string, (...args: unknown[]) => unknown> {
+  const instance = service as Record<string, unknown>;
+  const activities: Record<string, (...args: unknown[]) => unknown> = {};
+  for (const key of Object.getOwnPropertyNames(
+    Object.getPrototypeOf(service),
+  )) {
+    const property = instance[key];
+    if (!RESTRICTED_PROPERTIES.includes(key) && typeof property === "function") {
+      activities[key] = property.bind(service);
+    }
+  }
+  return activities;
+}
+
+{{/unless}}
+describe("{{workflowFn}}", () => {
+  let testEnv: TestWorkflowEnvironment;
+  let moduleRef: TestingModule;
+
+  beforeAll(async () => {
+    // Downloads the Temporal test server on first use, then reuses the cached binary
+    testEnv = await TestWorkflowEnvironment.createTimeSkipping();
+    // The real ActivitiesModule, with only the external infrastructure replaced
+    moduleRef = await Test.createTestingModule({
+      imports: [
+        ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true }),
+        ActivitiesModule,
+      ],
+    })
+      .overrideProvider(PrismaService)
+      .useValue({})
+      .overrideProvider(EmailService)
+      .useValue({})
+      .compile();
+  }, 120_000);
+
+  afterAll(async () => {
+    await moduleRef?.close();
+    await testEnv?.teardown();
+  });
+
+  it("runs {{activity}} through ActivitiesService", async () => {
+    const featureActivities = moduleRef.get({{featureClass}});
+    const spy = jest.spyOn(featureActivities, "{{activity}}");
+    const activities = discoverActivities(moduleRef.get(ActivitiesService));
+    expect(activities).toHaveProperty("{{activity}}");
+
+    const taskQueue = `test-{{fileBase}}-${randomUUID()}`;
+    const worker = await Worker.create({
+      connection: testEnv.nativeConnection,
+      taskQueue,
+      workflowsPath: require.resolve("./{{fileBase}}.workflow"),
+      activities,
+    });
+
+    const input = { id: randomUUID() };
+    const result = await worker.runUntil(
+      testEnv.client.workflow.execute({{workflowFn}}, {
+        args: [input],
+        taskQueue,
+        workflowId: `{{fileBase}}-${input.id}`,
+      }),
+    );
+
+    expect(spy).toHaveBeenCalledWith(input);
+    expect(result.id).toBe(input.id);
+  }, 120_000);
+});

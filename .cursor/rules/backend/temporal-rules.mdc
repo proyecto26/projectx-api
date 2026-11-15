@@ -1,9 +1,9 @@
 ---
 description: Rules for Temporal workflow integration and patterns
 globs: 
-  - packages/workflows/**/*
-  - apps/*/src/workflows/**/*
-  - apps/*/src/activities/**/*
+  - apps/api/src/workflows/**/*
+  - apps/api/src/activities/**/*
+  - apps/api/src/**/*.activities.ts
 alwaysApply: true
 ---
 # Temporal Workflow Rules
@@ -12,23 +12,24 @@ alwaysApply: true
 - Temporal Server version: 1.32.1
 - Temporal Admin Tools: 1.32.1
 - Temporal UI: 2.57.0
-- All services connect to Temporal for long-running business processes
+- The API (`apps/api`) runs the Temporal worker and client in-process for long-running business processes
 ## Workflow Architecture
 ### Workflow Locations
-- Workflow definitions: `apps/*/src/workflows/`
-- Activity implementations: `apps/*/src/activities/`
-- Shared workflow utilities: `packages/workflows/src/lib/`
-- Temporal configuration: `apps/*/src/config/temporal.config.ts`
+- Workflow definitions: `apps/api/src/workflows/` (barrel `index.ts`)
+- Activity registry: `apps/api/src/activities/activities.service.ts`
+- Activity implementations: feature classes `apps/api/src/app/<feature>/<feature>.activities.ts`
+- Signal/query/update definitions: `packages/core` (`@projectx/core/workflows`)
+- Worker/client wrapper: `@proyecto26/temporal-workflows` from npm (source in the ProjectX repo, `packages/workflows`)
+- Temporal configuration: `apps/api/src/config/temporal.config.ts`
 ### Worker Configuration
-- Each NestJS app runs its own Temporal worker
-- Workers are initialized in the main application bootstrap
-- Task queue is configured per service via environment variables
+- The API runs one Temporal worker, registered with `WorkflowsModule.registerAsync` in `AppModule`
+- Task queue comes from `temporal.taskQueue` in the Temporal config
 - Workers bundle workflows using Webpack
 ## Workflow Patterns
 ### Workflow Definition
 ```typescript
 import { proxyActivities } from '@temporalio/workflow';
-import type { ActivitiesService } from '../main';
+import type { ActivitiesService } from '../activities/activities.service';
 const activities = proxyActivities<ActivitiesService>({
   startToCloseTimeout: '1 minute',
 });
@@ -38,17 +39,25 @@ export async function myWorkflow(input: WorkflowInput): Promise<WorkflowOutput> 
   return result;
 }
 ```
-### Activity Definition
+### Activity Definition (registration contract)
+The worker registers only the methods on the immediate prototype of `ActivitiesService`. Implement activities in a feature class, provide and export it from its feature module, import that module in `ActivitiesModule`, and add one delegating method to `ActivitiesService`. `pnpm gen:workflow` does all of this and generates a `TestWorkflowEnvironment` test.
 ```typescript
+// apps/api/src/app/report/report.activities.ts (provided + exported by ReportModule)
 @Injectable()
-export class ActivitiesService {
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly emailService: EmailService,
-  ) {}
+export class ReportActivities {
+  constructor(@Inject(EmailService) private readonly emailService: EmailService) {}
   async myActivity(input: ActivityInput): Promise<ActivityOutput> {
     // Activity logic with side effects
     return result;
+  }
+}
+
+// apps/api/src/activities/activities.service.ts
+@Injectable()
+export class ActivitiesService {
+  constructor(@Inject(ReportActivities) private readonly reportActivities: ReportActivities) {}
+  async myActivity(input: ActivityInput) {
+    return this.reportActivities.myActivity(input);
   }
 }
 ```
@@ -188,22 +197,19 @@ async executeUpdate(workflowId: string, input: UpdateInput) {
 ## Search Attributes
 ### Custom Search Attributes
 The project defines these custom search attributes:
-- `OrderId` (Keyword)
-- `UserId` (Keyword)
-- `Email` (Keyword)
+- `Email` (Keyword), registered by `deployment/scripts/temporal/create-namespace.sh`
+- Add more through `TEMPORAL_SEARCH_ATTRIBUTES` before using them in workflows
 ### Using Search Attributes
 ```typescript
 // When starting a workflow
 await client.start(myWorkflow, {
   searchAttributes: {
-    OrderId: [orderId],
-    UserId: [userId],
     Email: [email],
   },
 });
 // Searching for workflows
 const workflows = await client.list({
-  query: 'OrderId = "order-123"',
+  query: 'Email = "user@example.com"',
 });
 ```
 ## Workflow Bundling
@@ -219,11 +225,10 @@ const workflows = await client.list({
 4. Worker connects to Temporal server
 5. Worker polls for tasks on the configured task queue
 ## Environment Variables
-### Required for All Services Using Temporal
+### Required by the API
 - `TEMPORAL_HOST` - Temporal server address (e.g., `temporal:7233`)
 - `TEMPORAL_PORT` - Temporal server port (default: `7233`)
 - `TEMPORAL_NAMESPACE` - Temporal namespace (default: `default`)
-- `TEMPORAL_TASK_QUEUE` - Task queue name for this service
 ### Connection String Format
 ```
 TEMPORAL_HOST=temporal:7233

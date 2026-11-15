@@ -49,9 +49,9 @@ export async function bootstrapApp<T extends NestExpressApplication>(
     const port = configService.get("app.port");
     const apiPrefix = configService.get("app.apiPrefix");
 
-    app.setGlobalPrefix(apiPrefix, {
-      exclude: ["/health"],
-    });
+    if (apiPrefix) {
+      app.setGlobalPrefix(apiPrefix, { exclude: ["/health"] });
+    }
 
     // PARSE HTTP REQUESTS
     app.useBodyParser("urlencoded", { limit: "50mb", extended: true });
@@ -68,11 +68,10 @@ export async function bootstrapApp<T extends NestExpressApplication>(
     setupAppSecurity(app);
     logger.log("Security is enabled");
 
-    // Local development
-    if (env === Environment.Development) {
-      app.enableShutdownHooks();
-      logger.log("Shutdown hooks are enabled");
-    }
+    // Run onModuleDestroy/onApplicationShutdown on SIGTERM and SIGINT, so the
+    // Temporal worker and the database connections close cleanly
+    app.enableShutdownHooks();
+    logger.log("Shutdown hooks are enabled");
 
     // Register the proxy's IP address (load balancer or reverse proxy)
     app.set("trust proxy", (ip: string) => TRUSTED_IPS.includes(ip));

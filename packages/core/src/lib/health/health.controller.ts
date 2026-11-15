@@ -8,6 +8,11 @@ import {
 } from "@nestjs/terminus";
 import { PrismaService } from "@projectx/db";
 
+import {
+  HEALTH_CONTRIBUTORS,
+  type HealthContributor,
+} from "./health.contributor";
+
 const MEMORY_HEAP_LIMIT = 512 * 1024 * 1024; // 512MB
 const MEMORY_RSS_LIMIT = 512 * 1024 * 1024; // 512MB
 
@@ -21,12 +26,15 @@ export class HealthController {
     @Inject(PrismaHealthIndicator)
     private readonly prismaHealth: PrismaHealthIndicator,
     @Inject(PrismaService) private readonly prismaService: PrismaService,
+    @Inject(HEALTH_CONTRIBUTORS)
+    private readonly contributors: HealthContributor[],
   ) {}
 
   /**
    * Perform a health check on the application.
    *
-   * This endpoint checks the health of the database connection and memory usage.
+   * This endpoint checks the database connection, memory usage and the
+   * contributors registered with `HealthModule.register`.
    *
    * @returns A JSON object containing the health status of the application.
    */
@@ -34,7 +42,8 @@ export class HealthController {
   @HealthCheck()
   @ApiOperation({
     summary: "Check application health",
-    description: "Performs a health check on the database and memory usage.",
+    description:
+      "Performs a health check on the database, memory usage and the registered contributors.",
   })
   @ApiResponse({ status: 200, description: "Health check successful." })
   @ApiResponse({ status: 503, description: "Service Unavailable." })
@@ -44,6 +53,7 @@ export class HealthController {
       async () => this.prismaHealth.pingCheck("db", this.prismaService),
       async () => this.memory.checkHeap("memory_heap", MEMORY_HEAP_LIMIT),
       async () => this.memory.checkRSS("memory_rss", MEMORY_RSS_LIMIT),
+      ...this.contributors.map((contributor) => () => contributor.isHealthy()),
     ]);
   }
 }
