@@ -240,8 +240,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/models
       '@proyecto26/temporal-workflows':
-        specifier: ^0.1.0
-        version: 0.1.0(@nestjs/common@12.3.3(class-transformer@0.5.1)(class-validator@0.14.3)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/config@12.1.0(@nestjs/common@12.3.3(class-transformer@0.5.1)(class-validator@0.14.3)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(rxjs@7.8.2))(@temporalio/client@1.25.0(long@5.3.2)(protobufjs@8.8.1))(@temporalio/proto@1.25.0)(@temporalio/worker@1.25.0(@swc/helpers@0.5.17)(clean-css@4.2.4)(esbuild@0.28.2)(lightningcss@1.33.0)(long@5.3.2)(postcss@8.5.30)(protobufjs@8.8.1)(uglify-js@3.19.3))
+        specifier: ^0.1.1
+        version: 0.1.1(@nestjs/common@12.3.3(class-transformer@0.5.1)(class-validator@0.14.3)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/config@12.1.0(@nestjs/common@12.3.3(class-transformer@0.5.1)(class-validator@0.14.3)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(rxjs@7.8.2))(@temporalio/client@1.25.0(long@5.3.2)(protobufjs@8.8.1))(@temporalio/proto@1.25.0)(@temporalio/worker@1.25.0(@swc/helpers@0.5.17)(clean-css@4.2.4)(esbuild@0.28.2)(lightningcss@1.33.0)(long@5.3.2)(postcss@8.5.30)(protobufjs@8.8.1)(uglify-js@3.19.3))
       '@temporalio/activity':
         specifier: 1.25.0
         version: 1.25.0(long@5.3.2)(protobufjs@8.8.1)
@@ -2108,12 +2108,12 @@ packages:
   '@protobufjs/utf8@1.1.0':
     resolution: {integrity: sha512-Vvn3zZrhQZkkBE8LSuW3em98c0FwgO4nxzv6OdSxPKJIEKY2bGbHn+mhGIPerzI4twdxaP8/0+06HBpwf345Lw==}
 
-  '@proyecto26/temporal-workflows@0.1.0':
-    resolution: {integrity: sha512-bTGxg/nCgAHzCLWh9XRQS/3BK80UW3wEjQU3a8vd4SlKvXbHzdkvq/MAABTfeSZUAv/YRLjtkYO5LRW8hUrOJg==}
+  '@proyecto26/temporal-workflows@0.1.1':
+    resolution: {integrity: sha512-stxrvMlIT/uHQKTRthwuNAhhIswQDaNebuMv1TPC5IIsihGveuNOLzoOwiRYs07wfe3/Vmdq/m0gr44pbU8agA==}
     engines: {node: '>=20.3.0'}
     peerDependencies:
-      '@nestjs/common': ^10.0.0 || ^11.0.0
-      '@nestjs/config': ^3.0.0 || ^4.0.0
+      '@nestjs/common': ^10.0.0 || ^11.0.0 || ^12.0.0
+      '@nestjs/config': ^3.0.0 || ^4.0.0 || ^12.0.0
       '@temporalio/client': ^1.25.0
       '@temporalio/proto': ^1.25.0
       '@temporalio/worker': ^1.25.0
@@ -7878,7 +7878,7 @@ snapshots:
 
   '@protobufjs/utf8@1.1.0': {}
 
-  '@proyecto26/temporal-workflows@0.1.0(@nestjs/common@12.3.3(class-transformer@0.5.1)(class-validator@0.14.3)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/config@12.1.0(@nestjs/common@12.3.3(class-transformer@0.5.1)(class-validator@0.14.3)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(rxjs@7.8.2))(@temporalio/client@1.25.0(long@5.3.2)(protobufjs@8.8.1))(@temporalio/proto@1.25.0)(@temporalio/worker@1.25.0(@swc/helpers@0.5.17)(clean-css@4.2.4)(esbuild@0.28.2)(lightningcss@1.33.0)(long@5.3.2)(postcss@8.5.30)(protobufjs@8.8.1)(uglify-js@3.19.3))':
+  '@proyecto26/temporal-workflows@0.1.1(@nestjs/common@12.3.3(class-transformer@0.5.1)(class-validator@0.14.3)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/config@12.1.0(@nestjs/common@12.3.3(class-transformer@0.5.1)(class-validator@0.14.3)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(rxjs@7.8.2))(@temporalio/client@1.25.0(long@5.3.2)(protobufjs@8.8.1))(@temporalio/proto@1.25.0)(@temporalio/worker@1.25.0(@swc/helpers@0.5.17)(clean-css@4.2.4)(esbuild@0.28.2)(lightningcss@1.33.0)(long@5.3.2)(postcss@8.5.30)(protobufjs@8.8.1)(uglify-js@3.19.3))':
     dependencies:
       '@nestjs/common': 12.3.3(class-transformer@0.5.1)(class-validator@0.14.3)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1)
       '@nestjs/config': 12.1.0(@nestjs/common@12.3.3(class-transformer@0.5.1)(class-validator@0.14.3)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(rxjs@7.8.2)

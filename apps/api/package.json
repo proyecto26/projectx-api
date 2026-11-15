@@ -33,7 +33,7 @@
     "@projectx/db": "workspace:*",
     "@projectx/email": "workspace:*",
     "@projectx/models": "workspace:*",
-    "@proyecto26/temporal-workflows": "^0.1.0",
+    "@proyecto26/temporal-workflows": "^0.1.1",
     "@temporalio/activity": "1.25.0",
     "@temporalio/client": "1.25.0",
     "@temporalio/common": "1.25.0",
